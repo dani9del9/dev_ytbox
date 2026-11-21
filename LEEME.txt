@@ -1,0 +1,17 @@
+YTBox - clon de PocketTube con muchos más iconos
+=======================================================
+Instalar (Chrome / Edge / Brave):
+ 1. Descomprime el zip en una carpeta.
+ 2. Abre chrome://extensions y activa "Modo de desarrollador".
+ 3. "Cargar descomprimida" -> elige la carpeta ytbox.
+
+Uso:
+ - Pulsa el icono de la extensión para abrir el gestor y crear grupos.
+ - En youtube.com/feed/channels aparece "Importar todas mis suscripciones".
+ - En cualquier canal o vídeo hay un botón flotante "Añadir a grupo".
+ - Los grupos salen en la barra lateral de YouTube; al pulsar uno ves los
+   últimos vídeos de sus canales (con filtro por canal, búsqueda y ocultar Shorts).
+
+Iconos: 1488 emojis, 102 iconos de línea con color, texto/iniciales,
+imagen propia (subir, arrastrar, pegar o URL) y avatares de canales.
+Opciones de color, fondo de color y forma redonda. Exportar/importar en JSON.

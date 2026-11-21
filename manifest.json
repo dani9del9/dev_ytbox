@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "YTBox — grupos de suscripciones de YouTube",
+  "short_name": "YTBox",
+  "version": "1.0.0",
+  "description": "Organiza tus suscripciones de YouTube en grupos con cientos de iconos: emojis, iconos de línea, texto, imágenes propias y avatares.",
+  "permissions": ["storage", "unlimitedStorage"],
+  "host_permissions": ["https://www.youtube.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Gestionar grupos", "default_icon": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" } },
+  "options_page": "manager.html",
+  "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "content_scripts": [{
+    "matches": ["https://www.youtube.com/*"],
+    "js": ["svg-icons.js", "common.js", "content.js"],
+    "css": ["content.css"],
+    "run_at": "document_idle"
+  }]
+}
