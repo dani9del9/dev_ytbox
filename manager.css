@@ -14,10 +14,10 @@ input,select{font:inherit;color:inherit}
 input[type=text],input[type=search],input[type=url]{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;outline:none}
 input[type=text]:focus,input[type=search]:focus,input[type=url]:focus{border-color:var(--acc)}
 
-#side{width:280px;flex:0 0 280px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 12px;gap:12px;overflow:auto}
+#side{width:280px;flex:0 0 280px;height:100vh;box-sizing:border-box;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 12px;gap:12px;overflow:hidden}
 .brand{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:700;padding:0 6px 6px}
-.brand img{width:30px;height:30px}
-#groupList{flex:1;display:flex;flex-direction:column;gap:2px}
+.brand-logo{display:inline-flex;width:30px;height:30px}
+#groupList{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin:0 -6px;padding:0 6px;scrollbar-width:thin}
 .g-item{display:flex;align-items:center;gap:12px;padding:8px 10px;border-radius:10px;cursor:pointer;user-select:none}
 .g-item:hover{background:var(--panel2)}
 .g-item.on{background:var(--acc-soft);font-weight:600}
@@ -92,7 +92,7 @@ h3{margin:26px 0 10px;font-size:16px}
 .primary:hover{filter:brightness(1.05)}
 .ch .ph{background:var(--panel2)}
 
-.brand span{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.brand span:not(.brand-logo){background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
 .primary{box-shadow:0 2px 10px var(--shadow)}
 
 .banner{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);max-width:min(760px,90vw);z-index:20;background:#2b2523;color:#fff;padding:14px 20px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);font-size:14px;line-height:1.45}
@@ -109,3 +109,97 @@ h3{margin:26px 0 10px;font-size:16px}
 .grad-preview{height:44px;border-radius:12px;background:var(--grad);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;letter-spacing:.02em;margin:14px 0 4px;box-shadow:0 4px 14px var(--shadow)}
 .set-row{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin:10px 0}
 .set-row>label.lbl{min-width:90px;color:var(--mut)}
+
+/* Canales clicables */
+.ch-link{display:flex;align-items:center;gap:10px;flex:1;min-width:0;color:inherit;text-decoration:none;border-radius:8px}
+.ch-link:hover .nm div{color:var(--acc);text-decoration:underline}
+.ch-link:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.ch-all{flex-wrap:wrap}
+.ch-all .ch-link{order:0}
+.ch-all .ch-groups{order:2;width:100%;padding-left:42px}
+
+/* Más aire en general */
+#side{padding:20px 16px;gap:16px}
+#main{padding:40px 56px 64px}
+h1{margin:0 0 28px}
+h3{margin:40px 0 16px}
+.editor-top{gap:24px;margin-bottom:8px}
+.row{gap:14px}
+.ch-list{gap:14px}
+.ch{padding:12px 14px;gap:12px}
+.toolbar{gap:14px;margin-bottom:28px}
+.card{padding:26px 30px;margin-bottom:24px}
+.card p{margin:8px 0 18px}
+.set-row{gap:22px;margin:18px 0}
+.secondary,.primary,.danger{padding:9px 18px}
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:40px 0 18px}
+.section-head h3{margin:0}
+.row + .ch-list{margin-top:10px}
+
+/* Modo TV */
+.tv-chips{display:flex;flex-wrap:wrap;gap:10px}
+.tv-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);font-weight:500}
+.tv-chip:hover{border-color:var(--acc)}
+.tv-chip.on{background:var(--grad);color:#fff;border-color:transparent}
+.tv-details{margin-top:18px}
+.tv-details summary{cursor:pointer;color:var(--acc);font-weight:500;margin-bottom:12px}
+.tv-clist{max-height:280px;overflow:auto;margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:4px 14px}
+.tv-ch{display:flex;align-items:center;gap:10px;padding:6px;border-radius:8px;cursor:pointer}
+.tv-ch:hover{background:var(--panel2)}
+.tv-ch img,.tv-ch .ph{width:26px;height:26px;border-radius:50%;flex:0 0 26px;object-fit:cover;background:var(--panel2)}
+.tv-ch input,.card input[type=checkbox]{accent-color:var(--acc);width:17px;height:17px}
+.tv-select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+.tv-num{width:110px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+.tv-go{font-size:17px;padding:12px 36px!important;border-radius:24px;letter-spacing:.04em}
+.tv-go:disabled{opacity:.6;cursor:wait}
+.tv-actions .msg{flex:1;margin:0;font-size:14px}
+.tv-result{margin-top:4px}
+.tv-list{margin:18px 0 0;padding-left:22px;line-height:1.9}
+.tv-list a{color:var(--txt);text-decoration:none;font-weight:500}
+.tv-list a:hover{color:var(--acc);text-decoration:underline}
+
+/* Modo TV: preconfiguraciones */
+.tv-presets{display:flex;flex-wrap:wrap;gap:12px}
+.tv-preset{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:12px;background:var(--panel2);overflow:hidden;max-width:100%}
+.tv-preset.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.tv-preset button{border:0;background:none;color:inherit;font:inherit;cursor:pointer;border-radius:0;padding:0}
+.tv-preset .tv-preset-load{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:10px 16px;text-align:left;min-width:0}
+.tv-preset-load b{font-size:15px}
+.tv-preset-load small{font-size:12px;color:var(--mut);max-width:340px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tv-preset .tv-preset-load:hover{background:var(--acc-soft)}
+.tv-preset .tv-preset-play{padding:0 16px;background:var(--grad);color:#fff;font-size:14px}
+.tv-preset .tv-preset-x{padding:0 12px;color:var(--mut);font-size:12px;white-space:nowrap}
+.tv-preset .tv-preset-x:hover{color:#d93a2b}
+.tv-name{flex:1;max-width:340px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+
+/* Avisos de canal */
+.ch-warn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;flex:0 0 28px;cursor:help}
+.ch-warn-dormido{background:rgba(120,130,160,.16);color:#6b7590}
+.ch-warn-ojoTachado{background:rgba(230,150,40,.16);color:#c77a12}
+
+/* Iconos de Modo TV y Descubrir (como en YouTube) */
+.mode-title{display:flex;align-items:center;gap:14px}
+.mode-ico{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:11px;background:var(--grad);flex:0 0 auto}
+.mode-ico.small{width:22px;height:22px;border-radius:6px;vertical-align:middle;margin-right:6px}
+.side-nav button{display:flex;align-items:center}
+/* Descubrir */
+.disc-results{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-top:20px}
+.disc-results:empty{display:none}
+.disc-card{display:flex;flex-direction:column;gap:10px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel2)}
+.disc-card.added{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.disc-who{display:flex;align-items:center;gap:12px;color:var(--txt);text-decoration:none}
+.disc-who:hover b{color:var(--acc);text-decoration:underline}
+.disc-who img,.disc-who .ph{width:48px;height:48px;border-radius:50%;flex:0 0 48px;object-fit:cover;background:var(--panel)}
+.disc-who > span{display:flex;flex-direction:column;min-width:0}
+.disc-who b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.disc-who small{color:var(--mut);font-size:12px}
+.disc-why{font-size:13px;line-height:1.45}
+.disc-vids{margin:0;padding-left:18px;font-size:13px;line-height:1.6}
+.disc-vids li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.disc-vids a{color:var(--txt);text-decoration:none}
+.disc-vids a:hover{color:var(--acc);text-decoration:underline}
+.disc-btns{margin-top:auto;gap:8px;flex-wrap:wrap}
+.disc-add{flex:1;min-width:0}
+.disc-nope{font-size:13px}
+.disc-ok{color:var(--acc);font-weight:600;font-size:14px;flex:1}
+.mode-ico.plain{background:none;color:var(--mut)}

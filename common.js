@@ -2,6 +2,11 @@
 const PG = (() => {
   const DEFAULT_STATE = { groups: [], channels: {}, settings: { hideShorts: false, sidebarOpen: true, recentIcons: [] } };
 
+  // En Firefox, las peticiones desde un content script se hacen mejor «como la página» (content.fetch):
+  // llevan las cookies de YouTube y el origen correcto. En Chrome y en las páginas de la extensión, fetch normal.
+  const pageFetch = (typeof content !== 'undefined' && content && typeof content.fetch === 'function')
+    ? content.fetch.bind(content) : fetch.bind(globalThis);
+
   async function load() {
     const data = await chrome.storage.local.get(['groups', 'channels', 'settings']);
     return {
@@ -40,7 +45,7 @@ const PG = (() => {
     const parts = u.pathname.split('/').filter(Boolean);
     if (parts[0] === 'channel' || parts[0] === 'c' || parts[0] === 'user') u.pathname = '/' + parts.slice(0, 2).join('/');
     else if (parts[0] && parts[0].startsWith('@')) u.pathname = '/' + parts[0];
-    const res = await fetch(u.href, { credentials: 'include' });
+    const res = await pageFetch(u.href, { credentials: 'include' });
     if (res.url.includes('consent.')) throw new Error('YouTube pide aceptar o rechazar cookies: abre youtube.com, responde al aviso y vuelve a intentarlo');
     if (!res.ok) throw new Error('No se encontró el canal (' + res.status + ') en ' + u.href);
     const html = await res.text();
@@ -81,6 +86,24 @@ const PG = (() => {
     }
     return svg;
   }
+
+  // Logo de YTBox (el play entre corchetes) con los dos colores de la app en degradado
+  let logoSeq = 0;
+  function logoEl(size = 24, c1 = DEFAULT_COLORS_LOGO[0], c2 = DEFAULT_COLORS_LOGO[1]) {
+    const id = 'ytbox-logo-g' + (++logoSeq);
+    const svg = document.createElementNS(SVGNS, 'svg');
+    svg.setAttribute('viewBox', '0 0 64 64'); svg.setAttribute('width', size); svg.setAttribute('height', size);
+    svg.setAttribute('aria-hidden', 'true'); svg.classList.add('ytbox-logo');
+    svg.style.flex = '0 0 auto';
+    const mk = (tag, attrs, parent) => { const n = document.createElementNS(SVGNS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); (parent || svg).appendChild(n); return n; };
+    const grad = mk('linearGradient', { id, x1: 0, y1: 0, x2: 1, y2: 1 }, mk('defs', {}));
+    mk('stop', { offset: 0, 'stop-color': c1 }, grad); mk('stop', { offset: 0.5, 'stop-color': c1 }, grad); mk('stop', { offset: 1, 'stop-color': c2 }, grad);
+    const sw = size <= 18 ? 8 : 7;
+    mk('path', { d: 'M20 9H10v46h10 M44 9h10v46H44', fill: 'none', stroke: `url(#${id})`, 'stroke-width': sw, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+    mk('polygon', { points: '25,21 25,43 44,32', fill: `url(#${id})`, stroke: `url(#${id})`, 'stroke-width': size <= 18 ? 2 : 1, 'stroke-linejoin': 'round' });
+    return svg;
+  }
+  const DEFAULT_COLORS_LOGO = ['#ff6347', '#9c5dc3'];
 
   // Crea el elemento visual de un icono de grupo.
   function iconEl(group, size = 24) {
@@ -153,5 +176,5 @@ const PG = (() => {
     });
   }
 
-  return { load, save, uid, keyFromHref, resolveChannel, ensureChannelId, iconEl, svgEl, relTime, fmtViews, isDark, themeVars, DEFAULT_COLORS };
+  return { fetch: pageFetch, load, save, uid, keyFromHref, resolveChannel, ensureChannelId, iconEl, svgEl, logoEl, relTime, fmtViews, isDark, themeVars, DEFAULT_COLORS };
 })();

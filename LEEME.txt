@@ -1,17 +1,43 @@
-YTBox - clon de PocketTube con muchos más iconos
-=======================================================
-Instalar (Chrome / Edge / Brave):
- 1. Descomprime el zip en una carpeta.
- 2. Abre chrome://extensions y activa "Modo de desarrollador".
- 3. "Cargar descomprimida" -> elige la carpeta ytbox.
+YTBox - grupos de suscripciones de YouTube (clon de PocketTube con más iconos)
+=============================================================================
 
-Uso:
+CHROME / EDGE / BRAVE
+ 1. Abre chrome://extensions (o edge://extensions) y activa "Modo de desarrollador".
+ 2. "Cargar descomprimida" -> elige esta carpeta (dev_ytbox).
+ 3. Tras cada cambio: botón de recargar de YTBox y recarga la pestaña de YouTube.
+
+FIREFOX (versión 128 o superior)
+ Primero genera la versión de Firefox:   node build.js
+ Se crea dist/firefox/ (carpeta) y dist/ytbox-firefox.xpi (paquete).
+
+ a) Para probar (se quita al cerrar Firefox):
+    about:debugging#/runtime/this-firefox -> "Cargar complemento temporal..."
+    -> elige dist/firefox/manifest.json
+
+ b) Para tenerla siempre instalada, Firefox exige que esté firmada:
+    - Entra en https://addons.mozilla.org/developers/ con tu cuenta de Firefox,
+      "Enviar un nuevo complemento" -> "En tu propio sitio" (no se publica en la tienda)
+      y sube dist/ytbox-firefox.xpi. Te devuelve un .xpi firmado: arrástralo a Firefox.
+    - O usa Firefox Developer Edition / Nightly con
+      about:config -> xpinstall.signatures.required = false
+      y abre dist/ytbox-firefox.xpi.
+
+ Al instalar, Firefox pide permiso para "acceder a tus datos de www.youtube.com":
+ acéptalo (si no, YTBox no puede funcionar). Si lo denegaste: about:addons -> YTBox
+ -> Permisos -> activar youtube.com.
+
+COMPILAR
+ node build.js  (no necesita instalar nada) genera:
+   dist/chrome/            y dist/ytbox-chrome.zip   (Chrome Web Store)
+   dist/firefox/           y dist/ytbox-firefox.xpi  (Firefox)
+ El código es el mismo; solo cambia el manifest (Firefox usa script de fondo
+ en vez de service worker, options_ui y un id propio: ytbox@dani9del9).
+
+USO
  - Pulsa el icono de la extensión para abrir el gestor y crear grupos.
  - En youtube.com/feed/channels aparece "Importar todas mis suscripciones".
+ - En el gestor -> Ajustes: importar desde PocketTube, apariencia (tema y colores),
+   sincronización y copias de seguridad.
  - En cualquier canal o vídeo hay un botón flotante "Añadir a grupo".
  - Los grupos salen en la barra lateral de YouTube; al pulsar uno ves los
-   últimos vídeos de sus canales (con filtro por canal, búsqueda y ocultar Shorts).
-
-Iconos: 1488 emojis, 102 iconos de línea con color, texto/iniciales,
-imagen propia (subir, arrastrar, pegar o URL) y avatares de canales.
-Opciones de color, fondo de color y forma redonda. Exportar/importar en JSON.
+   últimos vídeos de sus canales con filtros, orden, cola y menú ⋮ por vídeo.

@@ -7,12 +7,14 @@
 </head>
 <body>
 <aside id="side">
-  <div class="brand"><img src="icons/icon48.png" alt=""> <span>YTBox</span></div>
+  <div class="brand"><span class="brand-logo"></span> <span>YTBox</span></div>
   <button id="newGroup" class="primary wide">+ Nuevo grupo</button>
   <div id="groupList"></div>
   <nav class="side-nav">
-    <button data-view="channels">📺 Todos los canales</button>
-    <button data-view="settings">⚙ Ajustes</button>
+    <button data-view="tv"><span class="nav-ico" data-ico="tv"></span> Modo TV</button>
+    <button data-view="discover"><span class="nav-ico" data-ico="brujula"></span> Descubrir</button>
+    <button data-view="channels"><span class="nav-ico" data-ico="grupo" data-plain="1"></span> Todos los canales</button>
+    <button data-view="settings"><span class="nav-ico" data-ico="engranaje" data-plain="1"></span> Ajustes</button>
   </nav>
 </aside>
 
@@ -50,6 +52,9 @@
 <script src="emoji-data.js"></script>
 <script src="svg-icons.js"></script>
 <script src="common.js"></script>
+<script src="yt-api.js"></script>
+<script src="tv.js"></script>
+<script src="discover.js"></script>
 <script src="manager.js"></script>
 </body>
 </html>

@@ -27,7 +27,7 @@ async function persist(keys = ['groups', 'channels', 'settings']) {
   setTimeout(() => saving = false, 50);
 }
 
-chrome.storage.onChanged.addListener(async () => { if (saving) return; state = await PG.load(); applyTheme(); render(); });
+chrome.storage.onChanged.addListener(async ch => { if (ch.chanHealth) chanHealth = ch.chanHealth.newValue || {}; if (saving) return; state = await PG.load(); applyTheme(); render(); });
 
 // ---------- Tema del gestor ----------
 const darkMQ = window.matchMedia('(prefers-color-scheme: dark)');
@@ -40,8 +40,31 @@ function applyTheme() {
   r.setProperty('--acc', v.acc); r.setProperty('--acc2', v.acc2); r.setProperty('--grad', v.grad);
   r.setProperty('--acc-soft', v.accSoft); r.setProperty('--shadow', v.shadow);
   document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+  const bl = document.querySelector('.brand-logo');
+  if (bl) bl.replaceChildren(PG.logoEl(30, v.acc, v.acc2));
 }
 darkMQ.addEventListener('change', applyTheme);
+
+function channelUrl(c) {
+  if (c.handle) return 'https://www.youtube.com/' + encodeURI(c.handle);
+  if (c.id) return 'https://www.youtube.com/channel/' + c.id;
+  if (String(c.key).startsWith('@')) return 'https://www.youtube.com/' + encodeURI(c.key);
+  return 'https://www.youtube.com/channel/' + c.key;
+}
+// Avatar y nombre del canal como enlace a su página de YouTube (pestaña nueva)
+function channelLink(c, sub) {
+  return h('a', { class: 'ch-link', href: channelUrl(c), target: '_blank', rel: 'noopener', title: 'Abrir ' + c.name + ' en YouTube' },
+    avatarEl(c), h('div', { class: 'nm' }, h('div', {}, c.name), sub));
+}
+
+// Avisos calculados al abrir el grupo en YouTube (canal que no sube / canal que no ves)
+let chanHealth = {};
+chrome.storage.local.get('chanHealth').then(r => { chanHealth = r.chanHealth || {}; if (Object.keys(chanHealth).length) render(); });
+function healthEl(c) {
+  const hl = chanHealth[c.key];
+  if (!hl || Date.now() - hl.t > 14 * 864e5) return null;
+  return h('span', { class: 'ch-warn ch-warn-' + hl.icon, title: hl.text, 'aria-label': hl.text }, PG.svgEl(hl.icon, 16, 'currentColor'));
+}
 
 function avatarEl(c, cls = '') {
   return c && c.avatar ? h('img', { src: c.avatar, referrerpolicy: 'no-referrer', class: cls }) : h('span', { class: 'ph ' + cls });
@@ -54,6 +77,8 @@ function route() {
   if (hash.startsWith('group=')) view = { name: 'group', id: hash.slice(6) };
   else if (hash === 'channels') view = { name: 'channels' };
   else if (hash === 'settings') view = { name: 'settings' };
+  else if (hash === 'tv') view = { name: 'tv' };
+  else if (hash === 'discover') view = { name: 'discover' };
   render();
 }
 window.addEventListener('hashchange', route);
@@ -101,6 +126,8 @@ function render() {
   main.replaceChildren();
   if (view.name === 'channels') return renderChannels(main);
   if (view.name === 'settings') return renderSettings(main);
+  if (view.name === 'tv') return renderTV(main);
+  if (view.name === 'discover') return renderDiscover(main);
   let g = state.groups.find(x => x.id === view.id);
   if (!g && state.groups.length) { g = state.groups[0]; view.id = g.id; renderSide(); }
   if (!g) {
@@ -135,7 +162,7 @@ function renderGroup(main, g) {
 
   // Canales del grupo
   const chans = g.channels.map(k => state.channels[k] || { key: k, name: k });
-  main.append(h('div', { class: 'row', style: 'justify-content:space-between;margin-top:26px' },
+  main.append(h('div', { class: 'section-head' },
     h('h3', { style: 'margin:0' }, `Canales en el grupo (${chans.length})`),
     chans.length > 1 ? h('button', { class: 'secondary', title: 'Ordena los canales del grupo alfabéticamente', onclick: async () => {
       g.channels.sort((a, b) => ((state.channels[a] || {}).name || a).localeCompare((state.channels[b] || {}).name || b, 'es', { sensitivity: 'base' }));
@@ -144,7 +171,7 @@ function renderGroup(main, g) {
   const list = h('div', { class: 'ch-list' });
   if (!chans.length) list.append(h('div', { class: 'muted' }, 'Ningún canal todavía. Añádelos abajo.'));
   for (const c of chans) {
-    list.append(h('div', { class: 'ch' }, avatarEl(c), h('div', { class: 'nm' }, h('div', {}, c.name), h('small', {}, c.handle || c.id || c.key)),
+    list.append(h('div', { class: 'ch' }, channelLink(c, h('small', {}, c.handle || c.id || c.key)), healthEl(c),
       h('button', { class: 'icon-btn', title: 'Quitar del grupo', onclick: async () => { g.channels = g.channels.filter(k => k !== c.key); await persist(['groups']); render(); } }, '✕')));
   }
   main.append(list);
@@ -219,7 +246,7 @@ function renderChannels(main) {
         };
         return b;
       }));
-      return h('div', { class: 'ch' }, avatarEl(c), h('div', { class: 'nm' }, h('div', {}, c.name), tags),
+      return h('div', { class: 'ch ch-all' }, channelLink(c, null), healthEl(c), tags,
         h('button', { class: 'icon-btn', title: 'Olvidar canal', onclick: async () => {
           if (!confirm(`¿Olvidar «${c.name}»? Se quitará de todos los grupos.`)) return;
           delete state.channels[c.key]; state.groups.forEach(g => g.channels = g.channels.filter(k => k !== c.key));
@@ -265,11 +292,18 @@ function renderSettings(main) {
       if (isPocketTube(data)) { file.value = ''; return importPocketTube(data); }
       if (!Array.isArray(data.groups)) throw new Error('Archivo no válido');
       const merge = confirm('Aceptar = COMBINAR con lo que ya tienes.\nCancelar = REEMPLAZAR todo.');
+      const presetsIn = Array.isArray(data.tvPresets) ? data.tvPresets : (data.settings && Array.isArray(data.settings.tvPresets) ? data.settings.tvPresets : []);
       if (merge) {
         Object.assign(state.channels, data.channels || {});
         for (const g of data.groups) { const ex = state.groups.find(x => x.id === g.id); if (ex) ex.channels = [...new Set([...ex.channels, ...g.channels])]; else state.groups.push(g); }
-      } else { state.groups = data.groups; state.channels = data.channels || {}; }
-      await persist(['groups', 'channels']); msg.className = 'msg'; msg.textContent = '✔ Importado'; render();
+        // Presets del Modo TV: se añaden; si ya hay uno con el mismo nombre, se actualiza
+        for (const p of presetsIn) if (p && p.name && p.cfg) YTBoxTV.savePreset(state, p.name, p.cfg);
+      } else {
+        state.groups = data.groups; state.channels = data.channels || {};
+        if (data.settings) state.settings = Object.assign({}, state.settings, data.settings, { sync: state.settings.sync });
+        state.settings.tvPresets = presetsIn.filter(p => p && p.name && p.cfg);
+      }
+      await persist(['groups', 'channels', 'settings']); applyTheme(); msg.className = 'msg'; msg.textContent = '✔ Importado'; render();
     } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
   };
   const syncCb = h('input', { type: 'checkbox' }); syncCb.checked = !!state.settings.sync;
@@ -307,10 +341,10 @@ function renderSettings(main) {
           setTimeout(showSync, 300);
         } }, '⟳ Sincronizar ahora')), syncMsg),
     h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Copia de seguridad'),
-      h('p', {}, 'Guarda tus grupos, iconos y canales en un archivo JSON, o restáuralos en otro navegador.'),
+      h('p', {}, 'Guarda tus grupos, iconos, canales, preconfiguraciones del Modo TV y ajustes en un archivo JSON, o restáuralos en otro navegador.'),
       h('div', { class: 'row' },
         h('button', { class: 'primary', onclick: () => {
-          const blob = new Blob([JSON.stringify({ app: 'YTBox', version: 1, groups: state.groups, channels: state.channels }, null, 2)], { type: 'application/json' });
+          const blob = new Blob([JSON.stringify({ app: 'YTBox', version: 2, groups: state.groups, channels: state.channels, tvPresets: YTBoxTV.presets(state), settings: Object.assign({}, state.settings, { tvPresets: undefined }) }, null, 2)], { type: 'application/json' });
           const a = h('a', { href: URL.createObjectURL(blob), download: `ytbox-${new Date().toISOString().slice(0, 10)}.json` }); a.click();
         } }, '⬇ Exportar JSON'),
         h('button', { class: 'secondary', onclick: () => file.click() }, '⬆ Importar JSON'), file), msg),
@@ -323,6 +357,237 @@ function renderSettings(main) {
         if (!confirm('¿Seguro? Se borrarán todos los grupos y canales.')) return;
         state.groups = []; state.channels = {}; await persist(['groups', 'channels']); render();
       } }, 'Borrar todo')));
+}
+
+function modeIcon(name, size) {
+  const small = size === 'small';
+  return h('span', { class: 'mode-ico' + (small ? ' small' : '') }, PG.svgEl(name, small ? 14 : 24, '#ffffff'));
+}
+
+// ---------- Descubrir ----------
+function renderDiscover(main) {
+  const cfg = Object.assign({}, YTBoxDiscover.DEFAULTS, state.settings.discover || {});
+  const groupsSel = new Set(cfg.groups.filter(id => state.groups.some(g => g.id === id)));
+  const chansSel = new Set(cfg.channels.filter(k => state.channels[k]));
+  const saveCfg = () => { state.settings.discover = { groups: [...groupsSel], channels: [...chansSel] }; persist(['settings']); };
+  const count = h('span', { class: 'muted' });
+  const updateCount = () => {
+    const n = YTBoxTV.selectedChannels({ groups: [...groupsSel], channels: [...chansSel] }, state).length;
+    count.textContent = n ? `${n} canal${n > 1 ? 'es' : ''} seleccionado${n > 1 ? 's' : ''}` + (n > 12 ? ' · se mirarán 12 al azar cada vez' : '') : 'Ningún canal seleccionado';
+  };
+  const gchips = h('div', { class: 'tv-chips' });
+  const drawGroups = () => gchips.replaceChildren(...state.groups.map(g => h('button', { class: 'tv-chip' + (groupsSel.has(g.id) ? ' on' : ''), 'aria-pressed': groupsSel.has(g.id) ? 'true' : 'false',
+    onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); saveCfg(); } }, PG.iconEl(g, 20), g.name)));
+  drawGroups();
+  const q = h('input', { type: 'search', placeholder: 'Buscar canal…', style: 'width:100%;max-width:420px' });
+  const clist = h('div', { class: 'tv-clist' });
+  const allCh = Object.values(state.channels).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+  const drawCh = () => {
+    const t = q.value.toLowerCase();
+    clist.replaceChildren(...allCh.filter(c => !t || c.name.toLowerCase().includes(t) || (c.handle || '').includes(t)).slice(0, 400).map(c => {
+      const cb = h('input', { type: 'checkbox' }); cb.checked = chansSel.has(c.key);
+      cb.onchange = () => { cb.checked ? chansSel.add(c.key) : chansSel.delete(c.key); updateCount(); saveCfg(); };
+      return h('label', { class: 'tv-ch' }, cb, avatarEl(c), h('span', {}, c.name));
+    }));
+  };
+  q.oninput = drawCh; drawCh();
+  const details = h('details', { class: 'tv-details' }, h('summary', {}, `Elegir canales sueltos (${allCh.length})`), q, clist);
+  if (chansSel.size) details.open = true;
+
+  const status = h('div', { class: 'msg', role: 'status' });
+  const results = h('div', { class: 'disc-results' });
+  const go = h('button', { class: 'primary tv-go' }, '✦ Descubrir');
+  const cardFor = f => {
+    const url = 'https://www.youtube.com/' + (f.handle || 'channel/' + f.id);
+    const card = h('div', { class: 'disc-card' });
+    const add = h('select', { class: 'tv-select disc-add', title: 'Añadir este canal a uno de tus grupos' },
+      h('option', { value: '' }, '+ Añadir a grupo…'), ...state.groups.map(g => h('option', { value: g.id }, g.name)));
+    add.onchange = async () => {
+      const g = state.groups.find(x => x.id === add.value); if (!g) return;
+      const key = f.handle || f.id;
+      if (!state.channels[key]) state.channels[key] = { key, id: f.id, handle: f.handle || null, name: f.name || key, avatar: f.avatar || '' };
+      if (!g.channels.includes(key)) g.channels.push(key);
+      await persist(['groups', 'channels']); renderSide();
+      card.classList.add('added');
+      add.replaceWith(h('span', { class: 'disc-ok' }, `✓ Añadido a «${g.name}»`));
+    };
+    const nope = h('button', { class: 'secondary disc-nope', title: 'No volver a sugerirlo' }, 'No me interesa');
+    nope.onclick = async () => {
+      const ig = state.settings.discoverIgnored || (state.settings.discoverIgnored = []);
+      if (!ig.includes(f.id)) ig.push(f.id);
+      await persist(['settings']); card.remove();
+    };
+    card.append(
+      h('a', { class: 'disc-who', href: url, target: '_blank', rel: 'noopener', title: 'Abrir el canal en YouTube' },
+        f.avatar ? h('img', { src: f.avatar, referrerpolicy: 'no-referrer' }) : h('span', { class: 'ph' }),
+        h('span', {}, h('b', {}, f.name || f.handle || f.id), h('small', {}, f.handle || ''))),
+      h('div', { class: 'muted disc-why' }, `Parecido a ${f.sourceNames.slice(0, 3).join(', ')}${f.sourceNames.length > 3 ? ` y ${f.sourceNames.length - 3} más` : ''} · sale ${f.hits} ${f.hits === 1 ? 'vez' : 'veces'} en sus relacionados`),
+      h('ul', { class: 'disc-vids' }, ...f.videos.slice(0, 2).map(v => h('li', {}, h('a', { href: 'https://www.youtube.com/watch?v=' + v.vid, target: '_blank', rel: 'noopener' }, v.title)))),
+      h('div', { class: 'row disc-btns' }, add, nope));
+    return card;
+  };
+  go.onclick = async () => {
+    saveCfg();
+    status.className = 'msg'; status.textContent = 'Preparando…'; results.replaceChildren(); go.disabled = true;
+    try {
+      const r = await YTBoxDiscover.run({ groups: [...groupsSel], channels: [...chansSel] }, state, t => { status.textContent = t; });
+      status.textContent = r.list.length ? `✔ ${r.list.length} canales sugeridos a partir de ${r.scanned} de tus canales. Vuelve a pulsar para otra tanda.` : 'No he encontrado canales nuevos esta vez. Prueba con otros canales o vuelve a intentarlo.';
+      results.append(...r.list.map(cardFor));
+    } catch (e) { status.className = 'msg err'; status.textContent = e.message; }
+    finally { go.disabled = false; }
+  };
+
+  main.append(
+    h('h1', { class: 'mode-title' }, modeIcon('brujula'), 'Descubrir'),
+    h('p', { class: 'muted', style: 'max-width:760px;margin:-12px 0 28px' }, 'Elige tus canales y te sugiero canales parecidos que aún no tienes en YTBox: los que más aparecen en los vídeos relacionados de los tuyos. También puedes abrirlo desde YouTube, en el lateral de YTBox.'),
+    h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '¿A partir de qué canales?'),
+      state.groups.length ? gchips : h('p', {}, 'Aún no tienes grupos.'), details, h('div', { style: 'margin-top:14px' }, count)),
+    h('div', { class: 'card tv-actions' }, h('div', { class: 'row', style: 'justify-content:space-between' }, status, go), results));
+  updateCount();
+}
+
+// ---------- Modo TV ----------
+const fmtClock = s => { s = Math.round(s); const m = Math.floor(s / 60), x = s % 60; return `${m}:${String(x).padStart(2, '0')}`; };
+function renderTV(main) {
+  const cfg = Object.assign({}, YTBoxTV.DEFAULTS, state.settings.tv || {});
+  const groupsSel = new Set(cfg.groups.filter(id => state.groups.some(g => g.id === id)));
+  const chansSel = new Set(cfg.channels.filter(k => state.channels[k]));
+  const current = () => ({ groups: [...groupsSel], channels: [...chansSel], onlyUnwatched: onlyNew.checked, maxAge: ageSel.value, amount: Number(amount.value) || 0, unit: unit.value, style, clip: Number(clipSel.value) || 60, maxLen: Number(lenSel.value) || 0 });
+  // Cómo: vídeos completos o picoteo
+  let style = cfg.style === 'picoteo' ? 'picoteo' : 'full';
+  const clipSel = h('select', { class: 'tv-select' }, ...YTBoxTV.CLIPS.map(([v, t]) => h('option', { value: String(v) }, t)));
+  clipSel.value = String(cfg.clip || 60); if (!clipSel.value) clipSel.value = '60';
+  const styleBox = h('div', { class: 'tv-chips' });
+  const clipRow = h('div', { class: 'row', style: 'margin-top:16px' }, h('span', {}, 'Trozo de cada vídeo:'), clipSel);
+  const styleHelp = h('p', { class: 'muted', style: 'margin:14px 0 0' });
+  const drawStyle = () => {
+    styleBox.replaceChildren(...[['full', '📺 Vídeos completos'], ['picoteo', '🍿 Picoteo']].map(([v, t]) =>
+      h('button', { class: 'tv-chip' + (style === v ? ' on' : ''), onclick: () => { style = v; drawStyle(); saveCfg(); } }, t)));
+    clipRow.style.display = style === 'picoteo' ? '' : 'none';
+    styleHelp.textContent = style === 'picoteo'
+      ? 'Solo se reproduce el trozo más visto de cada vídeo (según la curva de «lo más visto» de YouTube) y salta solo al siguiente. Ideal para ponerte al día rápido.'
+      : 'Se reproduce cada vídeo entero.';
+  };
+  clipSel.onchange = () => saveCfg();
+  let saveT;
+  const saveCfg = () => { clearTimeout(saveT); saveT = setTimeout(() => { state.settings.tv = current(); persist(['settings']); }, 300); };
+
+  const count = h('span', { class: 'muted' });
+  const updateCount = () => {
+    const n = YTBoxTV.selectedChannels({ groups: [...groupsSel], channels: [...chansSel] }, state).length;
+    count.textContent = n ? `${n} canal${n > 1 ? 'es' : ''} seleccionado${n > 1 ? 's' : ''}` : 'Ningún canal seleccionado';
+  };
+  // Grupos
+  const gchips = h('div', { class: 'tv-chips' });
+  const drawGroups = () => gchips.replaceChildren(...state.groups.map(g => h('button', { class: 'tv-chip' + (groupsSel.has(g.id) ? ' on' : ''), 'aria-pressed': groupsSel.has(g.id) ? 'true' : 'false',
+    onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); saveCfg(); } }, PG.iconEl(g, 20), g.name)));
+  drawGroups();
+  // Canales sueltos
+  const q = h('input', { type: 'search', placeholder: 'Buscar canal…', style: 'width:100%;max-width:420px' });
+  const clist = h('div', { class: 'tv-clist' });
+  const allCh = Object.values(state.channels).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+  const drawCh = () => {
+    const t = q.value.toLowerCase();
+    clist.replaceChildren(...allCh.filter(c => !t || c.name.toLowerCase().includes(t) || (c.handle || '').includes(t)).slice(0, 400).map(c => {
+      const cb = h('input', { type: 'checkbox' }); cb.checked = chansSel.has(c.key);
+      cb.onchange = () => { cb.checked ? chansSel.add(c.key) : chansSel.delete(c.key); updateCount(); saveCfg(); };
+      return h('label', { class: 'tv-ch' }, cb, avatarEl(c), h('span', {}, c.name));
+    }));
+  };
+  q.oninput = drawCh; drawCh();
+  const details = h('details', { class: 'tv-details' }, h('summary', {}, `Añadir canales sueltos (${allCh.length})`), q, clist);
+  if (chansSel.size) details.open = true;
+  // Qué vídeos
+  const onlyNew = h('input', { type: 'checkbox' }); onlyNew.checked = !!cfg.onlyUnwatched; onlyNew.onchange = saveCfg;
+  const ageSel = h('select', { class: 'tv-select' }, ...[['all', 'Cualquier fecha'], ['day', 'Último día'], ['3days', 'Últimos 3 días'], ['week', 'Última semana'], ['month', 'Último mes']].map(([v, t]) => h('option', { value: v }, t)));
+  ageSel.value = cfg.maxAge; ageSel.onchange = saveCfg;
+  const lenSel = h('select', { class: 'tv-select' }, ...YTBoxTV.MAXLENS.map(([v, t]) => h('option', { value: String(v) }, t)));
+  lenSel.value = String(cfg.maxLen || 0); if (!lenSel.value) lenSel.value = '0'; lenSel.onchange = saveCfg;
+  // Duración
+  const amount = h('input', { type: 'number', min: '1', step: '1', value: String(cfg.amount), class: 'tv-num' }); amount.oninput = saveCfg;
+  const unit = h('select', { class: 'tv-select' }, h('option', { value: 'min' }, 'minutos'), h('option', { value: 'h' }, 'horas'));
+  unit.value = cfg.unit; unit.onchange = saveCfg;
+  const quick = h('div', { class: 'tv-chips' }, ...[[30, 'min', '30 min'], [1, 'h', '1 h'], [2, 'h', '2 h'], [4, 'h', '4 h']].map(([n, u, t]) =>
+    h('button', { class: 'tv-chip', onclick: () => { amount.value = n; unit.value = u; saveCfg(); } }, t)));
+  // Ver
+  const status = h('div', { class: 'msg', role: 'status' });
+  const result = h('div', { class: 'tv-result' });
+  const go = h('button', { class: 'primary tv-go' }, '▶ VER');
+  const applyCfg = c => {
+    c = Object.assign({}, YTBoxTV.DEFAULTS, c);
+    groupsSel.clear(); c.groups.forEach(id => state.groups.some(g => g.id === id) && groupsSel.add(id));
+    chansSel.clear(); c.channels.forEach(k => state.channels[k] && chansSel.add(k));
+    onlyNew.checked = !!c.onlyUnwatched; ageSel.value = c.maxAge; amount.value = String(c.amount); unit.value = c.unit;
+    lenSel.value = String(c.maxLen || 0); if (!lenSel.value) lenSel.value = '0';
+    style = c.style === 'picoteo' ? 'picoteo' : 'full'; clipSel.value = String(c.clip || 60); if (!clipSel.value) clipSel.value = '60'; drawStyle();
+    drawGroups(); drawCh(); if (chansSel.size) details.open = true; updateCount(); saveCfg();
+  };
+  // Preconfiguraciones guardadas
+  let activeId = null;
+  const nameIn = h('input', { type: 'text', placeholder: 'Nombre, p. ej. Dormir', maxlength: '40', class: 'tv-name' });
+  const presetBox = h('div', { class: 'tv-presets' });
+  const loadPreset = p => { activeId = p.id; applyCfg(p.cfg); nameIn.value = p.name; status.className = 'msg'; status.textContent = ''; drawPresets(); };
+  const drawPresets = () => {
+    const list = YTBoxTV.presets(state);
+    presetBox.replaceChildren(...(list.length ? list.map(p => {
+      const del = h('button', { class: 'tv-preset-x', title: 'Borrar', 'aria-label': 'Borrar ' + p.name }, '✕');
+      del.onclick = () => {
+        if (!del.dataset.armed) { del.dataset.armed = '1'; del.textContent = '¿Borrar?'; setTimeout(() => { if (del.isConnected) { delete del.dataset.armed; del.textContent = '✕'; } }, 3000); return; }
+        YTBoxTV.deletePreset(state, p.id); if (activeId === p.id) activeId = null;
+        persist(['settings']); drawPresets();
+      };
+      return h('div', { class: 'tv-preset' + (p.id === activeId ? ' on' : '') },
+        h('button', { class: 'tv-preset-load', title: 'Cargar esta configuración', onclick: () => loadPreset(p) }, h('b', {}, p.name), h('small', {}, YTBoxTV.summary(p.cfg, state))),
+        h('button', { class: 'tv-preset-play', title: 'Ver ya', 'aria-label': 'Ver ' + p.name, onclick: () => { loadPreset(p); go.click(); } }, '▶'), del);
+    }) : [h('span', { class: 'muted' }, 'Aún no tienes ninguna. Configura abajo y guárdala con un nombre (p. ej. «Dormir» o «Comer»).')]));
+  };
+  const saveBtn = h('button', { class: 'secondary' }, '💾 Guardar');
+  saveBtn.onclick = async () => {
+    const name = nameIn.value.trim();
+    if (!name) { status.className = 'msg err'; status.textContent = 'Ponle un nombre a la preconfiguración.'; nameIn.focus(); return; }
+    const exists = YTBoxTV.presets(state).some(x => x.name.toLowerCase() === name.toLowerCase());
+    const p = YTBoxTV.savePreset(state, name, current()); activeId = p.id;
+    state.settings.tv = current(); await persist(['settings']); drawPresets();
+    status.className = 'msg'; status.textContent = exists ? `«${p.name}» actualizada.` : `«${p.name}» guardada.`;
+  };
+  nameIn.onkeydown = e => { if (e.key === 'Enter') saveBtn.click(); };
+  drawPresets();
+  drawStyle();
+  go.onclick = async () => {
+    const c = current();
+    state.settings.tv = c; await persist(['settings']);
+    status.className = 'msg'; status.textContent = 'Preparando…'; result.replaceChildren(); go.disabled = true;
+    try {
+      const r = await YTBoxTV.run(c, state, t => { status.textContent = t; });
+      const url = await YTBoxTV.start(r.picked, c);
+      await chrome.tabs.create({ url });
+      status.textContent = `✔ ${r.picked.length} ${r.picoteo ? 'trozos' : 'vídeos'} · ${YTBoxTV.fmtDur(r.total)}` + (r.total < r.target * 0.9 ? ' (no hay más vídeos que cumplan las condiciones)' : '') + '. Se está reproduciendo en una pestaña nueva.';
+      const chName = id => (Object.values(state.channels).find(x => x.id === id) || {}).name || '';
+      result.append(
+        h('div', { class: 'row', style: 'margin-bottom:12px' }, h('button', { class: 'secondary', onclick: () => chrome.tabs.create({ url }) }, 'Abrir otra vez'), h('button', { class: 'secondary', onclick: () => go.click() }, '🔀 Otra lista distinta')),
+        h('ol', { class: 'tv-list' }, r.picked.map(v => h('li', {},
+          h('a', { href: 'https://www.youtube.com/watch?v=' + v.vid + (r.picoteo ? '&t=' + Math.round(v.start) + 's' : ''), target: '_blank', rel: 'noopener' }, v.title || v.vid),
+          h('span', { class: 'muted' }, ` · ${chName(v.channelId)} · ` + (r.picoteo ? `${fmtClock(v.start)}–${fmtClock(v.end)}${v.hot ? ' 🔥' : ''}` : YTBoxTV.fmtDur(v.seconds)))))));
+    } catch (e) { status.className = 'msg err'; status.textContent = e.message; }
+    finally { go.disabled = false; }
+  };
+
+  main.append(
+    h('h1', { class: 'mode-title' }, modeIcon('tv'), 'Modo TV'),
+    h('p', { class: 'muted', style: 'max-width:760px;margin:-12px 0 28px' }, 'Crea una lista con vídeos al azar de los canales que elijas y la reproduce en YouTube, con la duración total que indiques. También puedes abrirlo desde YouTube, en el lateral de YTBox.'),
+    h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Mis preconfiguraciones'), presetBox),
+    h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '¿De qué canales?'),
+      state.groups.length ? gchips : h('p', {}, 'Aún no tienes grupos.'), details, h('div', { style: 'margin-top:14px' }, count)),
+    h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '¿Qué vídeos?'),
+      h('label', { class: 'row', style: 'gap:8px;margin-bottom:16px' }, onlyNew, 'Solo vídeos que no he visto'),
+      h('div', { class: 'row' }, h('span', {}, 'Subidos en'), ageSel),
+      h('div', { class: 'row', style: 'margin-top:14px' }, h('span', {}, 'Duración máxima de cada vídeo'), lenSel)),
+    h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '¿Cuánto tiempo?'),
+      h('div', { class: 'row', style: 'margin-bottom:16px' }, amount, unit), quick),
+    h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '¿Cómo lo ves?'), styleBox, clipRow, styleHelp),
+    h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Guardar como preconfiguración'), h('div', { class: 'row' }, nameIn, saveBtn)),
+    h('div', { class: 'card tv-actions' }, h('div', { class: 'row', style: 'justify-content:space-between' }, status, go), result));
+  updateCount();
 }
 
 // ---------- Importar desde PocketTube ----------
@@ -595,6 +860,8 @@ async function applyPicker() {
 // ---------- Eventos globales ----------
 $('#newGroup').onclick = createGroup;
 $$('.side-nav button').forEach(b => b.onclick = () => go({ name: b.dataset.view }));
+// Iconos de Modo TV y Descubrir: los mismos de YouTube (cuadradito con el degradado de la app)
+$$('.side-nav .nav-ico').forEach(s => s.replaceWith(s.dataset.plain ? h('span', { class: 'mode-ico small plain' }, PG.svgEl(s.dataset.ico, 16, 'currentColor')) : modeIcon(s.dataset.ico, 'small')));
 $('#pickClose').onclick = closePicker;
 $('#picker').onclick = e => { if (e.target.id === 'picker') closePicker(); };
 $('#pickOk').onclick = applyPicker;

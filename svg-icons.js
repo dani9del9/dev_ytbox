@@ -75,6 +75,7 @@ const SVG_ICONS = {
   portatil:'<rect x="4" y="4" width="16" height="11" rx="1"/><path d="M2 19h20l-2-4H4z"/>',
   wifi:'<path d="M2 8.5a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8.5 15.5a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1"/>',
   play:'<circle cx="12" cy="12" r="10"/><path d="M10 8l6 4-6 4z"/>',
+  reproducir:'<path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/>',
   directo:'<circle cx="12" cy="12" r="2"/><path d="M8 8a6 6 0 0 0 0 8M16 8a6 6 0 0 1 0 8M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14"/>',
   podcast:'<circle cx="12" cy="10" r="3"/><path d="M12 13v9M7 15a7 7 0 1 1 10 0"/>',
   guitarra:'<path d="M20 2l2 2-6 6M14 8l2 2"/><path d="M13 9a3 3 0 0 0-4 0c-1 1-1 2-2 2.5S3 12 3 16a5 5 0 0 0 5 5c4 0 4.5-3 5-4s1.5-1 2.5-2a3 3 0 0 0 0-4z"/><circle cx="9" cy="15" r="1.5"/>',
@@ -101,5 +102,10 @@ const SVG_ICONS = {
   cuadricula:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
   lista:'<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
   capas:'<path d="M12 2l10 5-10 5L2 7z"/><path d="M2 12l10 5 10-5M2 17l10 5 10-5"/>',
+  cola:'<path d="M3 6h13M3 12h13M3 18h8"/><path d="M15 14.5l6.5 3.5-6.5 3.5z" fill="currentColor"/>',
+  listaMas:'<path d="M3 6h13M3 12h13M3 18h8"/><path d="M18 14v8M14 18h8"/>',
   caja:'<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  dormido:'<path d="M3 7h6l-6 8h6"/><path d="M13 4h4l-4 5h4"/><path d="M14 14h7l-7 7h7"/>',
+  ojoTachado:'<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/>',
+  brujula:'<circle cx="12" cy="12" r="10"/><path d="M16.2 7.8l-2.1 6.3-6.3 2.1 2.1-6.3z"/>',
 };
