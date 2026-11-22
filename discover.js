@@ -27,7 +27,7 @@ const YTBoxDiscover = (() => {
     await pool(sample, 4, async c => {
       try {
         let vids = [];
-        try { vids = (await YTAPI.channelVideos(c.id)).filter(v => v.seconds >= 61); } catch (e) { lastErr = e; }
+        try { vids = (await YTAPI.channelVideos(c.id)).filter(v => v.seconds >= 61 && !v.members); } catch (e) { lastErr = e; }
         if (!vids.length) { try { vids = (await YTAPI.rssVideos(c.id)).filter(v => !v.short); } catch (e) { lastErr = e; } } // respaldo: RSS
         if (vids[0]) seeds.push({ vid: vids[0].vid, from: c });
         const rest = vids.slice(1, 15); if (rest.length) seeds.push({ vid: rest[Math.floor(Math.random() * rest.length)].vid, from: c });

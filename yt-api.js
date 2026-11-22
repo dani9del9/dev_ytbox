@@ -117,7 +117,8 @@ const YTAPI = (() => {
   }
 
   async function createPlaylist(title, videoId) {
-    const r = await call('playlist/create', { title, privacyStatus: 'PRIVATE', videoIds: videoId ? [videoId] : [] });
+    const ids = Array.isArray(videoId) ? videoId : videoId ? [videoId] : [];
+    const r = await call('playlist/create', { title, privacyStatus: 'PRIVATE', videoIds: ids });
     if (!r.playlistId) throw new Error('No se pudo crear la lista');
     return r.playlistId;
   }
@@ -164,6 +165,8 @@ const YTAPI = (() => {
     })).filter(v => v.vid);
   }
 
+  // Vídeos «Solo para miembros» (insignia de YouTube)
+  const MEMBERS_RE = /MEMBERS_ONLY|"Solo para miembros"|"Members only"/i;
   async function channelVideos(channelId) {
     let json = await publicCall('browse', { browseId: channelId, params: 'EgZ2aWRlb3PyBgQKAjoA' });
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -178,12 +181,14 @@ const YTAPI = (() => {
         const meta = [];
         (function w(x) { if (!x || typeof x !== 'object') return; if (Array.isArray(x)) { x.forEach(w); return; } if (typeof x.content === 'string' && x.content.length < 60) meta.push(x.content); for (const k in x) w(x[k]); })(l.metadata && l.metadata.lockupMetadataViewModel && l.metadata.lockupMetadataViewModel.metadata);
         const ago = meta.map(parseAgo).find(Boolean) || null;
-        if (dur) out.push({ vid: l.contentId, channelId, title: (l.metadata && l.metadata.lockupMetadataViewModel && l.metadata.lockupMetadataViewModel.title && l.metadata.lockupMetadataViewModel.title.content) || '', seconds: parseDur(dur), published: ago });
+        if (dur) out.push({ vid: l.contentId, channelId, title: (l.metadata && l.metadata.lockupMetadataViewModel && l.metadata.lockupMetadataViewModel.title && l.metadata.lockupMetadataViewModel.title.content) || '', seconds: parseDur(dur), published: ago,
+          members: MEMBERS_RE.test(js) });
         return;
       }
       if (o.videoRenderer && o.videoRenderer.videoId) { // formato antiguo
         const r = o.videoRenderer, dur = r.lengthText && r.lengthText.simpleText;
-        if (dur) out.push({ vid: r.videoId, channelId, title: (r.title && r.title.runs && r.title.runs[0] && r.title.runs[0].text) || '', seconds: parseDur(dur), published: parseAgo(r.publishedTimeText && r.publishedTimeText.simpleText) });
+        if (dur) out.push({ vid: r.videoId, channelId, title: (r.title && r.title.runs && r.title.runs[0] && r.title.runs[0].text) || '', seconds: parseDur(dur), published: parseAgo(r.publishedTimeText && r.publishedTimeText.simpleText),
+          members: MEMBERS_RE.test(JSON.stringify(r.badges || [])) });
         return;
       }
       for (const k in o) walk(o[k]);
@@ -230,7 +235,7 @@ const YTAPI = (() => {
     return null;
   }
   async function history(maxPages = 10) {
-    const vids = new Set(); let oldest = null, token = null, pages = 0;
+    const vids = new Set(), chanCounts = {}; let oldest = null, token = null, pages = 0;
     const text = t => !t ? '' : typeof t === 'string' ? t : t.simpleText || t.content || (t.runs || []).map(x => x.text).join('');
     do {
       const r = await call('browse', token ? { continuation: token } : { browseId: 'FEhistory' });
@@ -240,12 +245,22 @@ const YTAPI = (() => {
         if (Array.isArray(o)) { o.forEach(x => walk(x)); return; }
         if (key && /Header(Renderer|ViewModel)$/.test(key) && o.title) { const d = headerDate(text(o.title)); if (d && (!oldest || d < oldest)) oldest = d; }
         if (typeof o.videoId === 'string' && o.videoId.length === 11) vids.add(o.videoId);
-        if (o.lockupViewModel && typeof o.lockupViewModel.contentId === 'string' && o.lockupViewModel.contentId.length === 11) vids.add(o.lockupViewModel.contentId);
+        if (o.lockupViewModel && typeof o.lockupViewModel.contentId === 'string' && o.lockupViewModel.contentId.length === 11) {
+          vids.add(o.lockupViewModel.contentId);
+          const m = o.lockupViewModel.metadata && o.lockupViewModel.metadata.lockupMetadataViewModel;
+          const ch = (JSON.stringify((m && m.image) || (m && m.metadata) || {}).match(/"browseId":"(UC[\w-]{22})"/) || [])[1];
+          if (ch) chanCounts[ch] = (chanCounts[ch] || 0) + 1;
+          return;
+        }
+        if (o.videoRenderer && o.videoRenderer.videoId) {
+          const ch = (JSON.stringify(o.videoRenderer.ownerText || o.videoRenderer.longBylineText || {}).match(/"browseId":"(UC[\w-]{22})"/) || [])[1];
+          if (ch) chanCounts[ch] = (chanCounts[ch] || 0) + 1;
+        }
         if (o.continuationCommand && o.continuationCommand.token) token = o.continuationCommand.token;
         for (const k in o) walk(o[k], k);
       })(r);
     } while (token && pages < maxPages);
-    return { vids: [...vids], oldest, pages };
+    return { vids: [...vids], oldest, pages, chanCounts };
   }
 
   // Vídeos relacionados de un vídeo (columna derecha de /watch) con el canal de cada uno. No necesita sesión.
@@ -294,5 +309,26 @@ const YTAPI = (() => {
     return (JSON.stringify(json).match(/"browseId":"(UC[\w-]{22})"/) || [])[1] || null;
   }
 
-  return { channelVideos, rssVideos, resolveHandle, heatmap, history, related, addMany, watchLater, addToPlaylist, removeFromPlaylist, getPlaylists, createPlaylist, loggedIn: () => !!(cookie('SAPISID') || cookie('__Secure-3PAPISID')) };
+  // Suscriptores de un canal: «10,1 millones de suscriptores», «345 mil», «1.234», «10.1M subscribers»…
+  function parseSubs(t) {
+    t = String(t || '').toLowerCase();
+    const m = t.match(/([\d.,]+)\s*(millones|millón|mill|mil|m|k|b)?\b/);
+    if (!m) return null;
+    let num = m[1];
+    if (/^\d{1,3}([.,]\d{3})+$/.test(num) && !m[2]) num = num.replace(/[.,]/g, ''); // 1.234 / 1,234
+    else num = num.replace(/\.(?=\d{3}\b)/g, '').replace(',', '.');
+    const mult = { millones: 1e6, 'millón': 1e6, mill: 1e6, m: 1e6, mil: 1e3, k: 1e3, b: 1e9 }[m[2]] || 1;
+    const n = parseFloat(num);
+    return isNaN(n) ? null : Math.round(n * mult);
+  }
+  async function channelStats(channelId) {
+    const s = JSON.stringify(await publicCall('browse', { browseId: channelId, params: 'EgZ2aWRlb3PyBgQKAjoA' }));
+    const label = (s.match(/"accessibilityLabel":"([^"]*suscriptores[^"]*)"/) || s.match(/"content":"([^"]*suscriptores[^"]*)"/) || s.match(/"(?:content|accessibilityLabel)":"([^"]*subscribers[^"]*)"/) || [])[1];
+    const text = (s.match(/"content":"([^"]*(?:suscriptores|subscribers)[^"]*)"/) || [])[1] || null;
+    return { subs: label ? parseSubs(label) : null, subsText: text ? text.replace(/ de suscriptores| suscriptores| subscribers/i, '') : null };
+  }
+
+  async function deletePlaylist(playlistId) { return call('playlist/delete', { playlistId }); }
+
+  return { channelVideos, rssVideos, resolveHandle, deletePlaylist, channelStats, parseSubs, heatmap, history, related, addMany, watchLater, addToPlaylist, removeFromPlaylist, getPlaylists, createPlaylist, loggedIn: () => !!(cookie('SAPISID') || cookie('__Secure-3PAPISID')) };
 })();

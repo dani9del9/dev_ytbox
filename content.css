@@ -359,3 +359,49 @@ yt-flexible-actions-view-model .pg-chbtn{margin-left:8px;margin-top:0}
 .pg-tv-previnfo small{font-size:12px;color:var(--pg-mut)}
 .pg-tv-prevx{flex:0 0 32px;width:32px;height:32px;border-radius:50%;border:1px solid var(--pg-line);background:var(--pg-bg);color:var(--pg-mut);cursor:pointer;font-size:13px}
 .pg-tv-prevx:hover{color:#fff;background:#d93a2b;border-color:#d93a2b}
+
+/* Trabajando: spinner y barra de progreso */
+@keyframes pg-spin{to{transform:rotate(360deg)}}
+@keyframes pg-indet{0%{left:-35%;width:35%}100%{left:100%;width:35%}}
+.pg-spin{display:none;width:20px;height:20px;border-radius:50%;border:3px solid var(--pg-acc-soft);border-top-color:var(--pg-acc);animation:pg-spin .8s linear infinite;flex:0 0 20px;box-sizing:border-box}
+.pg-busy .pg-tv-foot > .pg-spin{display:inline-block}
+.pg-spin.pg-spin-w{display:inline-block;width:16px;height:16px;flex-basis:16px;border-color:rgba(255,255,255,.35);border-top-color:#fff;margin-right:8px;vertical-align:-3px}
+.pg-tv-go{display:inline-flex;align-items:center;justify-content:center}
+.pg-busy .pg-tv-go{cursor:progress;opacity:.9}
+.pg-tv-progress{display:none;position:relative;height:6px;border-radius:3px;background:var(--pg-acc-soft);overflow:hidden;margin-top:14px}
+.pg-busy .pg-tv-progress{display:block}
+.pg-tv-progress i{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:3px;background:var(--pg-grad);transition:width .25s ease}
+.pg-tv-progress.indet i{animation:pg-indet 1.1s ease-in-out infinite}
+.pg-busy .pg-tv-status{color:var(--pg-txt);font-weight:500}
+.pg-busy .pg-tv-go:disabled,.pg-busy .pg-tv-go[disabled]{opacity:1;background:var(--pg-grad);color:#fff;cursor:progress;filter:none}
+.pg-busy .pg-tv-prevbtn{opacity:.5}
+
+/* Calendario de subidas del grupo */
+.pg-btn.pg-cal-btn{display:inline-flex;align-items:center;justify-content:center}
+.pg-btn.pg-cal-btn.on{background:var(--pg-grad);color:#fff;border-color:transparent}
+.pg-cal{margin:0 0 18px;padding:16px 18px;border:1px solid var(--pg-line);border-radius:16px;background:var(--pg-panel)}
+.pg-cal-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.pg-cal-head b{font-size:16px;min-width:150px;text-align:center;text-transform:capitalize}
+.pg-btn.pg-cal-nav{width:32px;height:32px;font-size:18px;line-height:1}
+.pg-cal-today,.pg-cal-clear{height:30px;padding:0 12px;border-radius:15px;border:1px solid var(--pg-line);background:var(--pg-bg);color:var(--pg-txt);font:500 13px Roboto,Arial,sans-serif;cursor:pointer}
+.pg-cal-today:hover{border-color:var(--pg-acc);color:var(--pg-acc)}
+.pg-cal-clear{background:var(--pg-grad);color:#fff;border:0}
+.pg-cal-sum{margin-left:auto;font-size:13px;color:var(--pg-mut)}
+.pg-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.pg-cal-wd{text-align:center;font:600 12px Roboto,Arial,sans-serif;color:var(--pg-mut);padding-bottom:2px}
+.pg-cal-cell{min-height:64px;border-radius:10px}
+.pg-cal-day{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;padding:6px 8px;border:1px solid var(--pg-line);background:var(--pg-bg);color:var(--pg-txt);font:14px Roboto,Arial,sans-serif;text-align:left;cursor:default}
+.pg-cal-day:disabled{opacity:.55}
+.pg-cal-day.has{cursor:pointer;background:color-mix(in srgb,var(--pg-acc) calc(var(--i) * 38% + 8%),var(--pg-bg));border-color:color-mix(in srgb,var(--pg-acc) calc(var(--i) * 50% + 15%),var(--pg-line))}
+.pg-cal-day.has:hover{outline:2px solid var(--pg-acc);outline-offset:-1px}
+.pg-cal-day.sel{background:var(--pg-grad);color:#fff;border-color:transparent}
+.pg-cal-day.today .pg-cal-num{background:var(--pg-txt);color:var(--pg-bg);border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;font-weight:600}
+.pg-cal-num{font-weight:500;font-size:13px}
+.pg-cal-count{position:absolute;top:6px;right:8px;font:700 12px Roboto,Arial,sans-serif;color:var(--pg-acc)}
+.pg-cal-day.sel .pg-cal-count{color:#fff}
+.pg-cal-avs{display:flex;align-items:center}
+.pg-cal-avs img,.pg-cal-avs i{width:18px;height:18px;border-radius:50%;margin-right:-5px;border:2px solid var(--pg-bg);background:var(--pg-panel2);object-fit:cover;display:inline-block}
+.pg-cal-avs small{margin-left:8px;font-size:11px;color:var(--pg-mut)}
+.pg-cal-day.sel .pg-cal-avs small{color:#fff}
+.pg-cal-note{margin-top:10px;font-size:12px;color:var(--pg-mut)}
+.pg-compact .pg-cal-cell,.pg-list .pg-cal-cell{min-height:52px}

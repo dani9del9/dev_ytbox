@@ -144,6 +144,73 @@ function render() {
   renderGroup(main, g);
 }
 
+// ---------- Ordenar canales de un grupo ----------
+let viewStats = { chanViewCount: {}, histCounts: {}, histT: 0 };
+chrome.storage.local.get(['chanViewCount', 'ytHistory']).then(r => {
+  viewStats = { chanViewCount: r.chanViewCount || {}, histCounts: (r.ytHistory && r.ytHistory.chanCounts) || {}, histT: (r.ytHistory && r.ytHistory.t) || 0 };
+});
+const fmtNum = n => n >= 1e6 ? (n / 1e6).toLocaleString('es-ES', { maximumFractionDigits: 1 }) + ' M' : n >= 1e3 ? (n / 1e3).toLocaleString('es-ES', { maximumFractionDigits: 1 }) + ' K' : String(n);
+const timesSeen = c => Math.max(viewStats.chanViewCount[c.key] || 0, (c.handle && viewStats.chanViewCount[c.handle]) || 0, (c.id && viewStats.histCounts[c.id]) || 0);
+function sortMetric(c, mode) {
+  if (mode === 'subs') return typeof c.subs === 'number' ? `${fmtNum(c.subs)} suscriptores` : null;
+  if (mode === 'latest') return c.lastUpload ? 'Último vídeo ' + PG.relTime(new Date(c.lastUpload)) : (c.lastUploadT ? 'Sin vídeos' : null);
+  if (mode === 'watched') { const n = timesSeen(c); return n ? `Visto ${n} ${n === 1 ? 'vez' : 'veces'}` : 'No lo has visto'; }
+  return null;
+}
+async function poolRun(list, n, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, list.length) }, async () => {
+    while (i < list.length) { const k = i++; try { await fn(list[k]); } catch (e) { console.warn('[YTBox]', e); } }
+  }));
+}
+async function sortGroup(g, mode, statusEl, sel) {
+  if (!mode) return;
+  const chans = g.channels.map(k => state.channels[k]).filter(Boolean);
+  const name = c => (c.name || c.key);
+  const byName = (a, b) => name(a).localeCompare(name(b), 'es', { sensitivity: 'base' });
+  sel.disabled = true;
+  try {
+    // Datos que hagan falta (se guardan en el canal para no pedirlos cada vez)
+    if (mode === 'subs' || mode === 'latest') {
+      const maxAge = mode === 'subs' ? 7 * 864e5 : 6 * 3600e3;
+      const need = chans.filter(c => mode === 'subs' ? (!c.subsT || Date.now() - c.subsT > maxAge) : (!c.lastUploadT || Date.now() - c.lastUploadT > maxAge));
+      let done = 0;
+      const missing = need.filter(c => !c.id);
+      if (missing.length) { statusEl.textContent = `Buscando ${missing.length} canales…`; await poolRun(missing, 4, c => PG.ensureChannelId(c)); }
+      await poolRun(need.filter(c => c.id), 4, async c => {
+        try {
+          if (mode === 'subs') { const s = await YTAPI.channelStats(c.id); c.subs = s.subs; c.subsT = Date.now(); }
+          else {
+            let vids = [];
+            try { vids = await YTAPI.rssVideos(c.id); } catch { vids = (await YTAPI.channelVideos(c.id)).map(v => ({ published: v.published ? new Date(v.published) : null })); }
+            const t = vids.map(v => v.published && v.published.getTime()).filter(Boolean);
+            c.lastUpload = t.length ? Math.max(...t) : null; c.lastUploadT = Date.now();
+          }
+        } finally { done++; statusEl.textContent = `${mode === 'subs' ? 'Leyendo suscriptores' : 'Mirando su último vídeo'}… ${done}/${need.length}`; }
+      });
+      await persist(['channels']);
+    }
+    if (mode === 'watched') {
+      const r = await chrome.storage.local.get(['chanViewCount', 'ytHistory']);
+      viewStats = { chanViewCount: r.chanViewCount || {}, histCounts: (r.ytHistory && r.ytHistory.chanCounts) || {}, histT: (r.ytHistory && r.ytHistory.t) || 0 };
+    }
+    const cmp = {
+      az: byName,
+      subs: (a, b) => ((b.subs ?? -1) - (a.subs ?? -1)) || byName(a, b),
+      latest: (a, b) => ((b.lastUpload || 0) - (a.lastUpload || 0)) || byName(a, b),
+      watched: (a, b) => (timesSeen(b) - timesSeen(a)) || byName(a, b),
+    }[mode];
+    const sorted = chans.slice().sort(cmp).map(c => c.key);
+    const rest = g.channels.filter(k => !state.channels[k]);
+    g.channels = sorted.concat(rest);
+    state.settings.groupSort = Object.assign({}, state.settings.groupSort, { [g.id]: mode });
+    statusEl.textContent = mode === 'watched' && !viewStats.histT ? 'Para usar tu historial, abre YouTube con tu sesión iniciada' : '';
+    await persist(['groups', 'settings']);
+    render();
+  } catch (e) { statusEl.textContent = e.message; }
+  finally { sel.disabled = false; }
+}
+
 function renderGroup(main, g) {
   const name = h('input', { type: 'text', class: 'name-input', value: g.name });
   name.oninput = () => { g.name = name.value; renderSide(); };
@@ -162,16 +229,20 @@ function renderGroup(main, g) {
 
   // Canales del grupo
   const chans = g.channels.map(k => state.channels[k] || { key: k, name: k });
+  // Ordenar: A-Z, suscriptores, último vídeo subido o los que más ves. El orden se guarda en el grupo.
+  const sortMode = (state.settings.groupSort || {})[g.id] || '';
+  const sortStatus = h('span', { class: 'muted sort-status' });
+  const sortSel = h('select', { class: 'tv-select', title: 'Ordenar los canales del grupo' },
+    ...[['', 'Ordenar…'], ['az', 'Alfabético (A-Z)'], ['subs', 'Más suscriptores'], ['latest', 'Último vídeo subido'], ['watched', 'Los que más ves']].map(([v, t]) => h('option', { value: v }, t)));
+  sortSel.value = sortMode;
+  sortSel.onchange = () => sortGroup(g, sortSel.value, sortStatus, sortSel);
   main.append(h('div', { class: 'section-head' },
     h('h3', { style: 'margin:0' }, `Canales en el grupo (${chans.length})`),
-    chans.length > 1 ? h('button', { class: 'secondary', title: 'Ordena los canales del grupo alfabéticamente', onclick: async () => {
-      g.channels.sort((a, b) => ((state.channels[a] || {}).name || a).localeCompare((state.channels[b] || {}).name || b, 'es', { sensitivity: 'base' }));
-      await persist(['groups']); render();
-    } }, 'Ordenar A-Z') : null));
+    chans.length > 1 ? h('div', { class: 'row', style: 'gap:12px' }, sortStatus, sortSel) : null));
   const list = h('div', { class: 'ch-list' });
   if (!chans.length) list.append(h('div', { class: 'muted' }, 'Ningún canal todavía. Añádelos abajo.'));
   for (const c of chans) {
-    list.append(h('div', { class: 'ch' }, channelLink(c, h('small', {}, c.handle || c.id || c.key)), healthEl(c),
+    list.append(h('div', { class: 'ch' }, channelLink(c, h('small', {}, sortMetric(c, sortMode) || c.handle || c.id || c.key)), healthEl(c),
       h('button', { class: 'icon-btn', title: 'Quitar del grupo', onclick: async () => { g.channels = g.channels.filter(k => k !== c.key); await persist(['groups']); render(); } }, '✕')));
   }
   main.append(list);
@@ -359,6 +430,26 @@ function renderSettings(main) {
       } }, 'Borrar todo')));
 }
 
+// Indicador de trabajo para Modo TV y Descubrir: spinner, barra de progreso y botón en «Cargando…»
+function busyUI(go, status, idleLabel, busyLabel) {
+  const spin = h('span', { class: 'spin', 'aria-hidden': 'true' });
+  const bar = h('div', { class: 'progress' }, h('i'));
+  const progress = t => {
+    status.textContent = t;
+    const m = String(t).match(/(\d+)\/(\d+)/);
+    bar.classList.toggle('indet', !m);
+    bar.firstChild.style.width = m ? Math.round(100 * Number(m[1]) / Math.max(1, Number(m[2]))) + '%' : '';
+  };
+  const setBusy = on => {
+    spin.style.display = on ? 'inline-block' : 'none'; bar.style.display = on ? 'block' : 'none';
+    go.disabled = on; status.classList.toggle('busy', on);
+    if (on) { bar.classList.add('indet'); go.replaceChildren(h('span', { class: 'spin spin-w', 'aria-hidden': 'true' }), busyLabel); }
+    else go.textContent = idleLabel;
+  };
+  spin.style.display = 'none'; bar.style.display = 'none';
+  return { spin, bar, progress, setBusy };
+}
+
 function modeIcon(name, size) {
   const small = size === 'small';
   return h('span', { class: 'mode-ico' + (small ? ' small' : '') }, PG.svgEl(name, small ? 14 : 24, '#ffffff'));
@@ -428,21 +519,22 @@ function renderDiscover(main) {
   };
   go.onclick = async () => {
     saveCfg();
-    status.className = 'msg'; status.textContent = 'Preparando…'; results.replaceChildren(); go.disabled = true;
+    status.className = 'msg'; results.replaceChildren(); ui.setBusy(true); ui.progress('Preparando…');
     try {
-      const r = await YTBoxDiscover.run({ groups: [...groupsSel], channels: [...chansSel] }, state, t => { status.textContent = t; });
+      const r = await YTBoxDiscover.run({ groups: [...groupsSel], channels: [...chansSel] }, state, ui.progress);
       status.textContent = r.list.length ? `✔ ${r.list.length} canales sugeridos a partir de ${r.scanned} de tus canales. Vuelve a pulsar para otra tanda.` : 'No he encontrado canales nuevos esta vez. Prueba con otros canales o vuelve a intentarlo.';
       results.append(...r.list.map(cardFor));
     } catch (e) { status.className = 'msg err'; status.textContent = e.message; }
-    finally { go.disabled = false; }
+    finally { ui.setBusy(false); }
   };
+  const ui = busyUI(go, status, '✦ Descubrir', 'Buscando…');
 
   main.append(
     h('h1', { class: 'mode-title' }, modeIcon('brujula'), 'Descubrir'),
     h('p', { class: 'muted', style: 'max-width:760px;margin:-12px 0 28px' }, 'Elige tus canales y te sugiero canales parecidos que aún no tienes en YTBox: los que más aparecen en los vídeos relacionados de los tuyos. También puedes abrirlo desde YouTube, en el lateral de YTBox.'),
     h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '¿A partir de qué canales?'),
       state.groups.length ? gchips : h('p', {}, 'Aún no tienes grupos.'), details, h('div', { style: 'margin-top:14px' }, count)),
-    h('div', { class: 'card tv-actions' }, h('div', { class: 'row', style: 'justify-content:space-between' }, status, go), results));
+    h('div', { class: 'card tv-actions' }, h('div', { class: 'row', style: 'justify-content:space-between' }, h('div', { class: 'row busy-row' }, ui.spin, status), go), ui.bar, results));
   updateCount();
 }
 
@@ -556,10 +648,10 @@ function renderTV(main) {
   go.onclick = async () => {
     const c = current();
     state.settings.tv = c; await persist(['settings']);
-    status.className = 'msg'; status.textContent = 'Preparando…'; result.replaceChildren(); go.disabled = true;
+    status.className = 'msg'; result.replaceChildren(); ui.setBusy(true); ui.progress('Preparando…');
     try {
-      const r = await YTBoxTV.run(c, state, t => { status.textContent = t; });
-      const url = await YTBoxTV.start(r.picked, c);
+      const r = await YTBoxTV.run(c, state, ui.progress);
+      const url = await YTBoxTV.start(r.picked, c, state, ui.progress);
       await chrome.tabs.create({ url });
       status.textContent = `✔ ${r.picked.length} ${r.picoteo ? 'trozos' : 'vídeos'} · ${YTBoxTV.fmtDur(r.total)}` + (r.total < r.target * 0.9 ? ' (no hay más vídeos que cumplan las condiciones)' : '') + '. Se está reproduciendo en una pestaña nueva.';
       const chName = id => (Object.values(state.channels).find(x => x.id === id) || {}).name || '';
@@ -569,8 +661,9 @@ function renderTV(main) {
           h('a', { href: 'https://www.youtube.com/watch?v=' + v.vid + (r.picoteo ? '&t=' + Math.round(v.start) + 's' : ''), target: '_blank', rel: 'noopener' }, v.title || v.vid),
           h('span', { class: 'muted' }, ` · ${chName(v.channelId)} · ` + (r.picoteo ? `${fmtClock(v.start)}–${fmtClock(v.end)}${v.hot ? ' 🔥' : ''}` : YTBoxTV.fmtDur(v.seconds)))))));
     } catch (e) { status.className = 'msg err'; status.textContent = e.message; }
-    finally { go.disabled = false; }
+    finally { ui.setBusy(false); }
   };
+  const ui = busyUI(go, status, '▶ VER', 'Cargando…');
 
   main.append(
     h('h1', { class: 'mode-title' }, modeIcon('tv'), 'Modo TV'),
@@ -586,7 +679,7 @@ function renderTV(main) {
       h('div', { class: 'row', style: 'margin-bottom:16px' }, amount, unit), quick),
     h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '¿Cómo lo ves?'), styleBox, clipRow, styleHelp),
     h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Guardar como preconfiguración'), h('div', { class: 'row' }, nameIn, saveBtn)),
-    h('div', { class: 'card tv-actions' }, h('div', { class: 'row', style: 'justify-content:space-between' }, status, go), result));
+    h('div', { class: 'card tv-actions' }, h('div', { class: 'row', style: 'justify-content:space-between' }, h('div', { class: 'row busy-row' }, ui.spin, status), go), ui.bar, result));
   updateCount();
 }
 

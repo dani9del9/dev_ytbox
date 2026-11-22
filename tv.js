@@ -72,7 +72,7 @@ const YTBoxTV = (() => {
     const { watched = {} } = await chrome.storage.local.get('watched');
     const maxAge = AGES[cfg.maxAge] || 0;
     const maxLen = (Number(cfg.maxLen) || 0) * 60;
-    const candidates = all.filter(v => v.seconds >= 61 && (!maxLen || v.seconds <= maxLen) && (!cfg.onlyUnwatched || !watched[v.vid]) && (!maxAge || (v.published && Date.now() - v.published <= maxAge)));
+    const candidates = all.filter(v => v.seconds >= 61 && !v.members && (!maxLen || v.seconds <= maxLen) && (!cfg.onlyUnwatched || !watched[v.vid]) && (!maxAge || (v.published && Date.now() - v.published <= maxAge)));
     const target = n * (cfg.unit === 'h' ? 3600 : 60);
     if (cfg.style === 'picoteo') return runPicoteo(cfg, candidates, target, onStatus);
     const { picked, total } = build(candidates, target);
@@ -116,12 +116,43 @@ const YTBoxTV = (() => {
   }
 
   // Prepara la reproducción: en picoteo deja apuntado qué trozo ver de cada vídeo (lo usa content.js en /watch)
-  async function start(picked, cfg) {
+  // Con sesión iniciada se crea una lista privada llamada «YTBox TV mode» (y se borra la de la vez anterior);
+  // sin sesión, o si YouTube no deja, se usa la lista temporal de siempre.
+  const PLAYLIST_NAME = 'YTBox TV mode';
+  // Si la configuración es la de una preconfiguración guardada, la lista se llama como ella
+  const norm = c => { c = Object.assign({}, DEFAULTS, c); return JSON.stringify([[...(c.groups || [])].sort(), [...(c.channels || [])].sort(), !!c.onlyUnwatched, c.maxAge, Number(c.amount), c.unit, c.style || 'full', Number(c.clip) || 60, Number(c.maxLen) || 0]); };
+  function presetNameFor(cfg, state) {
+    if (!state) return null;
+    const k = norm(cfg);
+    const p = presets(state).find(x => norm(x.cfg) === k);
+    return p ? p.name : null;
+  }
+  // Una lista por nombre: cada vez se crea la nueva y se borra la anterior con ese mismo nombre
+  async function namedPlaylist(ids, name) {
+    if (typeof YTAPI === 'undefined' || !YTAPI.loggedIn()) return null;
+    try {
+      const st = await chrome.storage.local.get(['tvPlaylists', 'tvPlaylistId']);
+      const lists = st.tvPlaylists || {};
+      if (st.tvPlaylistId && !lists[PLAYLIST_NAME]) lists[PLAYLIST_NAME] = st.tvPlaylistId; // versión anterior
+      const old = lists[name];
+      const pid = await YTAPI.createPlaylist(name, ids);
+      lists[name] = pid;
+      await chrome.storage.local.set({ tvPlaylists: lists });
+      await chrome.storage.local.remove('tvPlaylistId');
+      if (old && old !== pid) YTAPI.deletePlaylist(old).catch(e => console.warn('[YTBox TV] no se pudo borrar la lista anterior', e));
+      return `https://www.youtube.com/watch?v=${ids[0]}&list=${pid}`;
+    } catch (e) { console.warn('[YTBox TV] lista con nombre', e); return null; }
+  }
+
+  async function start(picked, cfg, state, onStatus = () => {}) {
     if (cfg.style === 'picoteo') {
       const clips = {}; picked.forEach(v => { clips[v.vid] = [v.start, v.end, v.seconds]; });
       await chrome.storage.local.set({ tvSession: { t: Date.now(), order: picked.map(v => v.vid), clips, titles: Object.fromEntries(picked.map(v => [v.vid, v.title || ''])) } });
     } else await chrome.storage.local.remove('tvSession');
-    return playUrl(picked);
+    const ids = picked.slice(0, 50).map(v => v.vid);
+    const name = presetNameFor(cfg, state) || PLAYLIST_NAME;
+    if (typeof YTAPI !== 'undefined' && YTAPI.loggedIn()) onStatus(`Creando la lista «${name}»…`);
+    return (await namedPlaylist(ids, name)) || playUrl(picked);
   }
 
   const playUrl = picked => 'https://www.youtube.com/watch_videos?video_ids=' + picked.map(v => v.vid).join(',');
@@ -145,5 +176,5 @@ const YTBoxTV = (() => {
     return `${cfg.style === 'picoteo' ? '🍿 ' : ''}${cfg.amount} ${cfg.unit === 'h' ? 'h' : 'min'} · ${AGE_TXT[cfg.maxAge] || ''}${cfg.onlyUnwatched ? ' · sin ver' : ''}${Number(cfg.maxLen) ? ' · máx. ' + cfg.maxLen + ' min/vídeo' : ''} · ${names.join(', ') || 'sin canales'}`;
   }
 
-  return { AGES, DEFAULTS, CLIPS, MAXLENS, bestWindow, start, fmtDur, selectedChannels, build, run, playUrl, presets, savePreset, deletePreset, summary };
+  return { AGES, DEFAULTS, CLIPS, MAXLENS, presetNameFor, bestWindow, start, fmtDur, selectedChannels, build, run, playUrl, presets, savePreset, deletePreset, summary };
 })();
