@@ -17,7 +17,7 @@ const h = (tag, attrs = {}, ...kids) => {
   return el;
 };
 
-const PALETTE = ['#3ea6ff', '#ff4e45', '#ff8a00', '#ffcc00', '#2ecc71', '#00bfa5', '#00b8d9', '#5b6cff', '#9b59ff', '#ff4fa3', '#a1887f', '#8d99ae', '#ffffff', '#111111'];
+const PALETTE = ['#ff6347', '#3ea6ff', '#ff4e45', '#ff8a00', '#ffcc00', '#2ecc71', '#00bfa5', '#00b8d9', '#5b6cff', '#9b59ff', '#ff4fa3', '#a1887f', '#8d99ae', '#2b2523'];
 
 let saving = false;
 async function persist(keys = ['groups', 'channels', 'settings']) {
@@ -27,7 +27,21 @@ async function persist(keys = ['groups', 'channels', 'settings']) {
   setTimeout(() => saving = false, 50);
 }
 
-chrome.storage.onChanged.addListener(async () => { if (saving) return; state = await PG.load(); render(); });
+chrome.storage.onChanged.addListener(async () => { if (saving) return; state = await PG.load(); applyTheme(); render(); });
+
+// ---------- Tema del gestor ----------
+const darkMQ = window.matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const dark = PG.isDark(state.settings, darkMQ.matches);
+  const v = PG.themeVars(state.settings, dark);
+  const r = document.documentElement.style;
+  r.setProperty('--bg', v.bg); r.setProperty('--panel', v.panel); r.setProperty('--panel2', v.panel2);
+  r.setProperty('--line', v.line); r.setProperty('--txt', v.txt); r.setProperty('--mut', v.mut);
+  r.setProperty('--acc', v.acc); r.setProperty('--acc2', v.acc2); r.setProperty('--grad', v.grad);
+  r.setProperty('--acc-soft', v.accSoft); r.setProperty('--shadow', v.shadow);
+  document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+}
+darkMQ.addEventListener('change', applyTheme);
 
 function avatarEl(c, cls = '') {
   return c && c.avatar ? h('img', { src: c.avatar, referrerpolicy: 'no-referrer', class: cls }) : h('span', { class: 'ph ' + cls });
@@ -121,7 +135,12 @@ function renderGroup(main, g) {
 
   // Canales del grupo
   const chans = g.channels.map(k => state.channels[k] || { key: k, name: k });
-  main.append(h('h3', {}, `Canales en el grupo (${chans.length})`));
+  main.append(h('div', { class: 'row', style: 'justify-content:space-between;margin-top:26px' },
+    h('h3', { style: 'margin:0' }, `Canales en el grupo (${chans.length})`),
+    chans.length > 1 ? h('button', { class: 'secondary', title: 'Ordena los canales del grupo alfabéticamente', onclick: async () => {
+      g.channels.sort((a, b) => ((state.channels[a] || {}).name || a).localeCompare((state.channels[b] || {}).name || b, 'es', { sensitivity: 'base' }));
+      await persist(['groups']); render();
+    } }, 'Ordenar A-Z') : null));
   const list = h('div', { class: 'ch-list' });
   if (!chans.length) list.append(h('div', { class: 'muted' }, 'Ningún canal todavía. Añádelos abajo.'));
   for (const c of chans) {
@@ -212,12 +231,38 @@ function renderChannels(main) {
 }
 
 function renderSettings(main) {
-  main.append(h('h1', {}, 'Importar / Exportar'));
+  main.append(h('h1', {}, 'Ajustes'));
+  // ---- Apariencia: tema y colores de la app
+  const st = state.settings;
+  let saveT;
+  const saveLater = () => { clearTimeout(saveT); saveT = setTimeout(() => persist(['settings']), 300); };
+  const themeSeg = h('div', { class: 'theme-seg' });
+  const drawTheme = () => themeSeg.replaceChildren(...[['light', '☀️ Claro'], ['dark', '🌙 Oscuro'], ['auto', '🖥 Automático']].map(([v, t]) =>
+    h('button', { class: (st.theme || 'light') === v ? 'on' : '', onclick: () => { st.theme = v; drawTheme(); applyTheme(); saveLater(); } }, t)));
+  drawTheme();
+  const picker = (key, idx) => {
+    const inp = h('input', { type: 'color', value: st[key] || PG.DEFAULT_COLORS[idx] });
+    const code = h('code', {}, inp.value);
+    inp.oninput = () => { st[key] = inp.value; code.textContent = inp.value; applyTheme(); saveLater(); };
+    return { el: h('div', { class: 'color-pick' }, inp, code), inp, code };
+  };
+  const p1 = picker('color1', 0), p2 = picker('color2', 1);
+  main.append(h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '🎨 Apariencia'),
+    h('p', {}, 'Elige el tema y los dos colores de la app. Se usan en degradado (el primero domina la mitad) en botones, etiquetas y títulos, aquí y dentro de YouTube. «Automático» sigue el tema de YouTube o el de tu sistema.'),
+    h('div', { class: 'set-row' }, h('label', { class: 'lbl' }, 'Tema'), themeSeg),
+    h('div', { class: 'set-row' }, h('label', { class: 'lbl' }, 'Color 1'), p1.el, h('label', { class: 'lbl', style: 'min-width:auto;margin-left:14px' }, 'Color 2'), p2.el,
+      h('button', { class: 'secondary', onclick: () => {
+        st.color1 = PG.DEFAULT_COLORS[0]; st.color2 = PG.DEFAULT_COLORS[1];
+        p1.inp.value = st.color1; p1.code.textContent = st.color1; p2.inp.value = st.color2; p2.code.textContent = st.color2;
+        applyTheme(); saveLater();
+      } }, 'Restablecer')),
+    h('div', { class: 'grad-preview' }, 'YTBox')));
   const file = h('input', { type: 'file', accept: '.json,application/json', class: 'hidden' });
   const msg = h('div', { class: 'msg' });
   file.onchange = async () => {
     try {
       const data = JSON.parse(await file.files[0].text());
+      if (isPocketTube(data)) { file.value = ''; return importPocketTube(data); }
       if (!Array.isArray(data.groups)) throw new Error('Archivo no válido');
       const merge = confirm('Aceptar = COMBINAR con lo que ya tienes.\nCancelar = REEMPLAZAR todo.');
       if (merge) {
@@ -227,7 +272,40 @@ function renderSettings(main) {
       await persist(['groups', 'channels']); msg.className = 'msg'; msg.textContent = '✔ Importado'; render();
     } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
   };
+  const syncCb = h('input', { type: 'checkbox' }); syncCb.checked = !!state.settings.sync;
+  const syncMsg = h('div', { class: 'msg' });
+  const showSync = async () => {
+    const { syncStatus } = await chrome.storage.local.get('syncStatus');
+    if (!syncStatus) { syncMsg.textContent = ''; return; }
+    syncMsg.className = 'msg' + (syncStatus.error ? ' err' : '');
+    syncMsg.textContent = (syncStatus.error || ('✔ ' + syncStatus.ok)) + ' · ' + new Date(syncStatus.at).toLocaleString('es-ES');
+  };
+  syncCb.onchange = async () => { state.settings.sync = syncCb.checked; await persist(['settings']); setTimeout(showSync, 1500); };
+  showSync();
+  // Importar desde PocketTube
+  const ptFile = h('input', { type: 'file', accept: '.json,.txt,application/json,text/plain', class: 'hidden' });
+  const ptMsg = h('div', { class: 'msg' });
+  ptFile.onchange = async () => {
+    try {
+      const data = JSON.parse(await ptFile.files[0].text());
+      ptFile.value = '';
+      if (!isPocketTube(data)) throw new Error('Este archivo no parece una copia de seguridad de PocketTube');
+      await importPocketTube(data);
+    } catch (e) { ptMsg.className = 'msg err'; ptMsg.textContent = e.message; }
+  };
   main.append(
+    h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '📥 Importar desde PocketTube'),
+      h('p', {}, 'Trae tus grupos y canales de PocketTube. En PocketTube abre sus ajustes y exporta la copia de seguridad (un archivo .json o .txt); luego elígelo aquí. Los grupos con el mismo nombre se combinan.'),
+      h('div', { class: 'row' }, h('button', { class: 'primary', onclick: () => ptFile.click() }, 'Elegir archivo de PocketTube…'), ptFile), ptMsg),
+    h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Sincronizar entre navegadores'),
+      h('p', {}, 'Guarda tus grupos y canales en tu cuenta del navegador (Chrome o Edge con la sincronización activada) para tenerlos iguales en todos tus ordenadores. Los avatares no se sincronizan: se vuelven a cargar solos.'),
+      h('div', { class: 'row' }, h('label', { class: 'row', style: 'gap:8px' }, syncCb, 'Activar sincronización'),
+        h('button', { class: 'secondary', onclick: async () => {
+          syncMsg.className = 'msg'; syncMsg.textContent = 'Sincronizando…';
+          const r = await chrome.runtime.sendMessage({ type: 'syncNow' });
+          if (r && r.skipped) { syncMsg.textContent = 'Activa primero la sincronización'; return; }
+          setTimeout(showSync, 300);
+        } }, '⟳ Sincronizar ahora')), syncMsg),
     h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Copia de seguridad'),
       h('p', {}, 'Guarda tus grupos, iconos y canales en un archivo JSON, o restáuralos en otro navegador.'),
       h('div', { class: 'row' },
@@ -247,13 +325,117 @@ function renderSettings(main) {
       } }, 'Borrar todo')));
 }
 
+// ---------- Importar desde PocketTube ----------
+// Formato: { "<grupo>": ["UC…", "https://www.youtube.com/c/…"], …, ysc_collection, ysc_meta: { "<grupo>": { img, position } }, ysc_settings }
+function isPocketTube(d) {
+  return d && typeof d === 'object' && !Array.isArray(d) && (d.ysc_collection || d.ysc_meta || d.ysc_settings) && !Array.isArray(d.groups);
+}
+
+const PT_ICONS = [
+  [/serie|anime|manga/i, '📺'], [/\bdb\b|dragon/i, '🐉'], [/cocin|recet|food|comida|chef/i, '🍳'], [/m[uú]sic|music|canci|hh|hip ?hop|rap|trap/i, '🎵'], [/cine|pel[ií]cul|film|movie/i, '🎬'],
+  [/f[uú]tbol|futbol|soccer|deporte|sport/i, '⚽'], [/nintendo|switch|mario|zelda|pok[eé]mon/i, '🍄'], [/juego|game|gaming|videojuego|developer/i, '🎮'],
+  [/program|c[oó]digo|code|dev|javascript|python/i, '💻'], [/blender|3d|modelado/i, '🧊'], [/ajedrez|chess/i, '♟️'], [/anim|v[ií]deo|edici/i, '🎞️'],
+ [/fav/i, '⭐'], [/interesant|ciencia|science|curios|divulg/i, '💡'], [/entreten|humor|risa|comedia/i, '😂'],
+  [/meh|otros|varios|misc/i, '🤷'], [/noticia|news|pol[ií]tica/i, '📰'], [/viaje|travel/i, '✈️'], [/arte|art|dibujo|pint/i, '🎨'], [/tech|tecnolog/i, '📱'],
+  [/libro|book|lectura/i, '📚'], [/coche|motor|car/i, '🚗'], [/fitness|gym|salud/i, '💪'], [/podcast|charla/i, '🎙️'], [/kid|niñ|infantil/i, '🧸'],
+];
+const PT_COLORS = ['#ff6347', '#9c5dc3', '#3ea6ff', '#2ecc71', '#ff8a00', '#ff4fa3', '#00b8d9', '#5b6cff', '#ffcc00', '#00bfa5', '#a1887f', '#e74c3c'];
+
+function ptIcon(name, i) {
+  const hit = PT_ICONS.find(([re]) => re.test(name));
+  const color = PT_COLORS[i % PT_COLORS.length];
+  if (hit) return { icon: { type: 'emoji', value: hit[1] }, color };
+  const initials = name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).map(w => w[0]).join('').slice(0, 2).toUpperCase() || name.slice(0, 2).toUpperCase();
+  return { icon: { type: 'text', value: initials, bg: true }, color };
+}
+
+function statusBanner() {
+  let b = document.getElementById('importStatus');
+  if (!b) { b = h('div', { id: 'importStatus', class: 'banner' }); document.body.append(b); }
+  return b;
+}
+
+async function importPocketTube(data) {
+  const meta = data.ysc_meta || {};
+  const names = Object.keys(data).filter(k => !k.startsWith('ysc_') && Array.isArray(data[k]))
+    .sort((a, b) => ((meta[a] || {}).position ?? 999) - ((meta[b] || {}).position ?? 999));
+  if (!names.length) throw new Error('No hay grupos en el archivo');
+  const total = new Set(names.flatMap(n => data[n])).size;
+  if (!confirm(`Se van a importar ${names.length} grupos con ${total} canales de PocketTube.\nLos grupos con el mismo nombre se combinarán con los que ya tienes. ¿Continuar?`)) return;
+
+  const msg = statusBanner();
+  msg.className = 'banner'; msg.textContent = 'Importando desde PocketTube…';
+  const byId = id => Object.values(state.channels).find(c => c.id === id);
+  const pendingUrls = [];
+  names.forEach((name, i) => {
+    let g = state.groups.find(x => x.name.trim().toLowerCase() === name.trim().toLowerCase());
+    if (!g) { g = Object.assign({ id: PG.uid(), name, channels: [] }, ptIcon(name, i)); state.groups.push(g); }
+    for (const raw of data[name]) {
+      const v = String(raw).trim();
+      if (/^UC[\w-]{22}$/.test(v)) {
+        let c = byId(v);
+        if (!c) { c = { key: v, id: v, handle: null, name: v, avatar: '' }; state.channels[v] = c; }
+        if (!g.channels.includes(c.key)) g.channels.push(c.key);
+      } else if (v) pendingUrls.push({ g, v });
+    }
+  });
+  // Preferencias equivalentes
+  const pts = data.ysc_settings || {};
+  if (pts.sort_type === 'new' || pts.sort_type === 'old') state.settings.sortBy = pts.sort_type;
+  if (pts.video_view_type === 'list') state.settings.viewMode = 'list';
+  else if (pts.video_view_type === 'scale_grid' || pts.video_view_type === 'grid') state.settings.viewMode = 'grid';
+  await persist(['groups', 'channels', 'settings']);
+  render();
+
+  // Canales que venían como enlace (/c/…, /user/…, /@…): hay que averiguar su id
+  let failed = 0;
+  for (const { g, v } of pendingUrls) {
+    try {
+      const r = await PG.resolveChannel(v);
+      let c = byId(r.id);
+      if (!c) { c = { key: r.key, id: r.id, handle: r.handle, name: r.name, avatar: r.avatar }; state.channels[c.key] = c; }
+      if (!g.channels.includes(c.key)) g.channels.push(c.key);
+    } catch { failed++; }
+  }
+  if (pendingUrls.length) { await persist(['groups', 'channels']); render(); }
+
+  // Nombres de los canales (PocketTube solo guarda el id): se leen del RSS de cada canal, que es ligero
+  const unnamed = Object.values(state.channels).filter(c => c.id && c.name === c.id);
+  let done = 0;
+  const tick = () => { msg.className = 'banner'; msg.textContent = `✔ ${names.length} grupos importados. Cargando nombres de canales… ${done}/${unnamed.length}`; };
+  tick();
+  let i = 0;
+  await Promise.all(Array.from({ length: 6 }, async () => {
+    while (i < unnamed.length) {
+      const c = unnamed[i++];
+      try {
+        const res = await fetch('https://www.youtube.com/feeds/videos.xml?channel_id=' + c.id, { credentials: 'include' });
+        if (res.ok) {
+          const xml = new DOMParser().parseFromString(await res.text(), 'text/xml');
+          const t = xml.querySelector('feed > title')?.textContent || xml.getElementsByTagName('title')[0]?.textContent;
+          const author = xml.querySelector('feed > author > uri')?.textContent || '';
+          if (t) c.name = t;
+          const hm = author.match(/\/(@[^/?#]+)/); if (hm) c.handle = decodeURIComponent(hm[1]).toLowerCase();
+        }
+      } catch {}
+      done++; if (done % 10 === 0) { tick(); await persist(['channels']); }
+    }
+  }));
+  await persist(['channels']); render();
+  const noName = Object.values(state.channels).filter(c => c.name === c.id).length;
+  msg.className = 'banner done';
+  msg.onclick = () => msg.remove();
+  msg.title = 'Pulsa para cerrar';
+  msg.textContent = `✔ Importados ${names.length} grupos y ${total} canales de PocketTube.` + (failed ? ` ${failed} enlaces no se pudieron resolver.` : '') + (noName ? ` ${noName} canales sin nombre (puede que ya no existan).` : '') + ' Los avatares se cargan al abrir cada grupo en YouTube. Revisa los iconos en cada grupo.';
+}
+
 // ---------- Selector de iconos ----------
 const picker = { group: null, draft: null, color: null, tab: 'emoji', cat: 'all', q: '' };
 
 function openPicker(g) {
   picker.group = g;
   picker.draft = Object.assign({ type: 'emoji', value: '📁' }, JSON.parse(JSON.stringify(g.icon || {})));
-  picker.color = g.color || '#3ea6ff';
+  picker.color = g.color || '#ff6347';
   picker.tab = picker.draft.type === 'avatar' ? 'avatar' : (['emoji', 'svg', 'text', 'image'].includes(picker.draft.type) ? picker.draft.type : 'emoji');
   if (picker.draft.type === 'image' && picker.draft.fromChannel) picker.tab = 'avatar';
   $('#picker').classList.remove('hidden');
@@ -422,4 +604,4 @@ $('#pickBg').onchange = () => setDraft(picker.draft);
 $('#pickRound').onchange = () => setDraft(picker.draft);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closePicker(); });
 
-PG.load().then(s => { state = s; route(); });
+PG.load().then(s => { state = s; applyTheme(); route(); });

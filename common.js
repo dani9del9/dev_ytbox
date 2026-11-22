@@ -32,6 +32,7 @@ const PG = (() => {
     let url;
     if (/^UC[\w-]{22}$/.test(input)) url = 'https://www.youtube.com/channel/' + input;
     else if (input.startsWith('@')) url = 'https://www.youtube.com/' + input;
+    else if (input.startsWith('/')) url = 'https://www.youtube.com' + input;
     else if (/youtube\.com|youtu\.be/.test(input)) url = input.startsWith('http') ? input : 'https://' + input;
     else url = 'https://www.youtube.com/@' + input;
     const u = new URL(url);
@@ -40,7 +41,8 @@ const PG = (() => {
     if (parts[0] === 'channel' || parts[0] === 'c' || parts[0] === 'user') u.pathname = '/' + parts.slice(0, 2).join('/');
     else if (parts[0] && parts[0].startsWith('@')) u.pathname = '/' + parts[0];
     const res = await fetch(u.href, { credentials: 'include' });
-    if (!res.ok) throw new Error('No se encontró el canal (' + res.status + ')');
+    if (res.url.includes('consent.')) throw new Error('YouTube pide aceptar o rechazar cookies: abre youtube.com, responde al aviso y vuelve a intentarlo');
+    if (!res.ok) throw new Error('No se encontró el canal (' + res.status + ') en ' + u.href);
     const html = await res.text();
     const id = (html.match(/"externalId":"(UC[\w-]{22})"/) || html.match(/channel\/(UC[\w-]{22})"/) || [])[1];
     if (!id) throw new Error('No se pudo leer el id del canal');
@@ -65,25 +67,39 @@ const PG = (() => {
     return ch.id;
   }
 
+  // Construye el SVG con createElementNS: YouTube exige Trusted Types y prohíbe asignar HTML como texto
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  function svgEl(name, px, stroke) {
+    const svg = document.createElementNS(SVGNS, 'svg');
+    for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', width: px, height: px, fill: 'none', stroke, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })) svg.setAttribute(k, v);
+    svg.style.color = stroke;
+    const markup = (typeof SVG_ICONS !== 'undefined' && SVG_ICONS[name]) || '';
+    for (const m of markup.matchAll(/<(\w+)([^>]*?)\/?>/g)) {
+      const node = document.createElementNS(SVGNS, m[1]);
+      for (const at of m[2].matchAll(/([\w:-]+)="([^"]*)"/g)) node.setAttribute(at[1], at[2]);
+      svg.appendChild(node);
+    }
+    return svg;
+  }
+
   // Crea el elemento visual de un icono de grupo.
   function iconEl(group, size = 24) {
     const icon = group.icon || { type: 'emoji', value: '📁' };
-    const color = group.color || '#3ea6ff';
+    const color = group.color || '#ff6347';
     const el = document.createElement('span');
     el.className = 'pg-icon';
     el.style.cssText = `display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;flex:0 0 ${size}px;border-radius:${icon.round ? '50%' : Math.round(size / 4) + 'px'};overflow:hidden;line-height:1;`;
     if (icon.bg) el.style.background = color;
     switch (icon.type) {
       case 'svg': {
-        const inner = (typeof SVG_ICONS !== 'undefined' && SVG_ICONS[icon.value]) || '';
         const fg = icon.bg ? '#fff' : color;
-        el.innerHTML = `<svg viewBox="0 0 24 24" width="${Math.round(size * (icon.bg ? .7 : .9))}" height="${Math.round(size * (icon.bg ? .7 : .9))}" fill="none" stroke="${fg}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:${fg}">${inner}</svg>`;
+        el.append(svgEl(icon.value, Math.round(size * (icon.bg ? .7 : .9)), fg));
         break;
       }
-      case 'image':
-        el.innerHTML = '';
-        { const img = document.createElement('img'); img.src = icon.value; img.style.cssText = 'width:100%;height:100%;object-fit:cover'; img.referrerPolicy = 'no-referrer'; el.appendChild(img); }
+      case 'image': {
+        const img = document.createElement('img'); img.src = icon.value; img.style.cssText = 'width:100%;height:100%;object-fit:cover'; img.referrerPolicy = 'no-referrer'; el.appendChild(img);
         break;
+      }
       case 'text':
         el.textContent = icon.value || '?';
         el.style.fontWeight = '700';
@@ -115,5 +131,27 @@ const PG = (() => {
     return n + ' visualizaciones';
   }
 
-  return { load, save, uid, keyFromHref, resolveChannel, ensureChannelId, iconEl, relTime, fmtViews };
+  // ---------- Tema (claro / oscuro) y colores de la app ----------
+  const DEFAULT_COLORS = ['#ff6347', '#9c5dc3'];
+  const PALETTES = {
+    light: { bg: '#f6f3ee', panel: '#fcfaf7', panel2: '#eee9e2', line: '#e0d9cf', txt: '#2b2523', mut: '#7d736c' },
+    dark: { bg: '#1d1b1a', panel: '#272422', panel2: '#34302d', line: '#433d39', txt: '#f3eeea', mut: '#a99f98' },
+  };
+  function isDark(settings, contextDark) {
+    const t = (settings && settings.theme) || 'light';
+    return t === 'dark' || (t === 'auto' && !!contextDark);
+  }
+  function themeVars(settings, dark) {
+    const p = PALETTES[dark ? 'dark' : 'light'];
+    const c1 = (settings && settings.color1) || DEFAULT_COLORS[0];
+    const c2 = (settings && settings.color2) || DEFAULT_COLORS[1];
+    return Object.assign({}, p, {
+      acc: c1, acc2: c2,
+      grad: `linear-gradient(135deg,${c1} 50%,${c2} 100%)`,
+      accSoft: `color-mix(in srgb,${c1} ${dark ? 22 : 16}%,${p.bg})`,
+      shadow: `color-mix(in srgb,${c2} 32%,transparent)`,
+    });
+  }
+
+  return { load, save, uid, keyFromHref, resolveChannel, ensureChannelId, iconEl, svgEl, relTime, fmtViews, isDark, themeVars, DEFAULT_COLORS };
 })();
