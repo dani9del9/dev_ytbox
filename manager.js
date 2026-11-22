@@ -79,6 +79,7 @@ function route() {
   else if (hash === 'settings') view = { name: 'settings' };
   else if (hash === 'tv') view = { name: 'tv' };
   else if (hash === 'discover') view = { name: 'discover' };
+  else if (hash === 'calendar') view = { name: 'calendar' };
   render();
 }
 window.addEventListener('hashchange', route);
@@ -128,6 +129,7 @@ function render() {
   if (view.name === 'settings') return renderSettings(main);
   if (view.name === 'tv') return renderTV(main);
   if (view.name === 'discover') return renderDiscover(main);
+  if (view.name === 'calendar') return renderCalendar(main);
   let g = state.groups.find(x => x.id === view.id);
   if (!g && state.groups.length) { g = state.groups[0]; view.id = g.id; renderSide(); }
   if (!g) {
@@ -453,6 +455,123 @@ function busyUI(go, status, idleLabel, busyLabel) {
 function modeIcon(name, size) {
   const small = size === 'small';
   return h('span', { class: 'mode-ico' + (small ? ' small' : '') }, PG.svgEl(name, small ? 14 : 24, '#ffffff'));
+}
+
+// ---------- Calendario: los vídeos de todos los canales de todos los grupos ----------
+let calData = null;          // { t, items } (se reutiliza 15 min)
+let calLoading = null;
+const calUI = { month: null, group: '', type: 'videos', day: null };
+const MESES_CAL = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const pad2c = n => String(n).padStart(2, '0');
+const dayKeyC = d => `${d.getFullYear()}-${pad2c(d.getMonth() + 1)}-${pad2c(d.getDate())}`;
+const fmtDurC = s => { s = Math.round(s); const hh = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60), ss = s % 60; return (hh ? hh + ':' + pad2c(mm) : mm) + ':' + pad2c(ss); };
+
+function loadCalendarData(onProgress) {
+  if (calData && Date.now() - calData.t < 15 * 60 * 1000) return Promise.resolve(calData);
+  if (calLoading) return calLoading;
+  calLoading = (async () => {
+    const chans = new Map();
+    for (const g of state.groups) for (const k of g.channels) { const c = state.channels[k]; if (c && c.id) chans.set(c.id, c); }
+    const list = [...chans.values()];
+    const items = []; let done = 0;
+    await poolRun(list, 6, async c => {
+      try { (await YTAPI.rssVideos(c.id)).forEach(v => items.push(v)); }
+      finally { done++; onProgress(`Leyendo los vídeos de tus canales… ${done}/${list.length}`); }
+    });
+    calData = { t: Date.now(), items };
+    return calData;
+  })();
+  calLoading.finally(() => { calLoading = null; });
+  return calLoading;
+}
+
+function renderCalendar(main) {
+  const status = h('div', { class: 'msg', role: 'status' });
+  const dummy = h('button', { style: 'display:none' });
+  const ui = busyUI(dummy, status, '', '');
+  const box = h('div', {});
+  const head = h('div', { class: 'card' });
+  main.append(
+    h('h1', { class: 'mode-title' }, modeIcon('calendario'), 'Calendario'),
+    h('p', { class: 'muted', style: 'max-width:760px;margin:-12px 0 28px' }, 'Qué días han subido vídeos tus canales, de todos tus grupos. Pulsa un día para ver sus vídeos. YouTube da los últimos 15 vídeos de cada canal, así que los meses antiguos salen más vacíos.'),
+    head, box);
+  const groupsOf = new Map(); // channelId -> [grupos]
+  for (const g of state.groups) for (const k of g.channels) { const c = state.channels[k]; if (c && c.id) { if (!groupsOf.has(c.id)) groupsOf.set(c.id, []); if (!groupsOf.get(c.id).includes(g)) groupsOf.get(c.id).push(g); } }
+  const chanById = new Map(Object.values(state.channels).filter(c => c.id).map(c => [c.id, c]));
+  let durations = {};
+  chrome.storage.local.get('durations').then(r => { durations = r.durations || {}; if (calData) draw(); });
+
+  const draw = () => {
+    const items = calData.items.filter(v =>
+      (calUI.type === 'all' || (calUI.type === 'shorts') === !!v.short) &&
+      (!calUI.group || (groupsOf.get(v.channelId) || []).some(g => g.id === calUI.group)));
+    if (!calUI.month) {
+      const newest = items.reduce((m, v) => (v.published > m ? v.published : m), new Date(0));
+      const ref = items.length ? newest : new Date();
+      calUI.month = new Date(ref.getFullYear(), ref.getMonth(), 1);
+    }
+    const byDay = new Map();
+    for (const v of items) { const k = dayKeyC(v.published); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(v); }
+    const y = calUI.month.getFullYear(), m = calUI.month.getMonth();
+    const days = new Date(y, m + 1, 0).getDate(), lead = (new Date(y, m, 1).getDay() + 6) % 7;
+    let max = 1, total = 0;
+    for (let d = 1; d <= days; d++) { const n = (byDay.get(dayKeyC(new Date(y, m, d))) || []).length; max = Math.max(max, n); total += n; }
+    const today = dayKeyC(new Date());
+    const nav = delta => { calUI.month = new Date(y, m + delta, 1); calUI.day = null; draw(); };
+
+    // Filtros
+    head.replaceChildren(
+      h('div', { class: 'tv-chips' },
+        h('button', { class: 'tv-chip' + (!calUI.group ? ' on' : ''), onclick: () => { calUI.group = ''; calUI.day = null; draw(); } }, 'Todos los grupos'),
+        ...state.groups.map(g => h('button', { class: 'tv-chip' + (calUI.group === g.id ? ' on' : ''), onclick: () => { calUI.group = calUI.group === g.id ? '' : g.id; calUI.day = null; draw(); } }, PG.iconEl(g, 20), g.name))),
+      h('div', { class: 'row', style: 'margin-top:16px;gap:8px' },
+        ...[['videos', 'Vídeos'], ['shorts', 'Shorts'], ['all', 'Todo']].map(([v, t]) => h('button', { class: 'tv-chip' + (calUI.type === v ? ' on' : ''), onclick: () => { calUI.type = v; calUI.day = null; draw(); } }, t)),
+        h('span', { style: 'flex:1' }),
+        h('button', { class: 'secondary', title: 'Volver a leer los vídeos de tus canales', onclick: () => { calData = null; start(); } }, '⟳ Actualizar')));
+
+    const cells = [];
+    for (let i = 0; i < lead; i++) cells.push(h('span', { class: 'cal-cell blank' }));
+    for (let d = 1; d <= days; d++) {
+      const k = dayKeyC(new Date(y, m, d)), list = byDay.get(k) || [];
+      const authors = [...new Set(list.map(v => v.channelId))].map(id => chanById.get(id)).filter(Boolean);
+      cells.push(h('button', { class: 'cal-cell cal-day' + (list.length ? ' has' : '') + (k === today ? ' today' : '') + (calUI.day === k ? ' sel' : ''),
+        ...(list.length ? {} : { disabled: '' }), style: `--i:${(list.length / max).toFixed(2)}`,
+        title: list.length ? `${d} de ${MESES_CAL[m]}: ${list.length} vídeo${list.length > 1 ? 's' : ''}` : '',
+        onclick: () => { calUI.day = calUI.day === k ? null : k; draw(); if (calUI.day) setTimeout(() => $('.cal-daylist')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0); } },
+        h('span', { class: 'cal-num' }, String(d)),
+        list.length ? h('span', { class: 'cal-count' }, String(list.length)) : null,
+        authors.length ? h('span', { class: 'cal-avs' }, ...authors.slice(0, 4).map(c => c.avatar ? h('img', { src: c.avatar, referrerpolicy: 'no-referrer', alt: '' }) : h('i', {})), authors.length > 4 ? h('small', {}, '+' + (authors.length - 4)) : null) : null));
+    }
+    const dayList = calUI.day ? (byDay.get(calUI.day) || []).slice().sort((a, b) => b.published - a.published) : [];
+    box.replaceChildren(
+      h('div', { class: 'card cal-card' },
+        h('div', { class: 'cal-head' },
+          h('button', { class: 'secondary cal-nav', title: 'Mes anterior', 'aria-label': 'Mes anterior', onclick: () => nav(-1) }, '‹'),
+          h('b', {}, `${MESES_CAL[m]} ${y}`),
+          h('button', { class: 'secondary cal-nav', title: 'Mes siguiente', 'aria-label': 'Mes siguiente', onclick: () => nav(1) }, '›'),
+          h('button', { class: 'secondary', onclick: () => { const t = new Date(); calUI.month = new Date(t.getFullYear(), t.getMonth(), 1); calUI.day = null; draw(); } }, 'Hoy'),
+          h('span', { class: 'muted', style: 'margin-left:auto' }, total ? `${total} vídeo${total > 1 ? 's' : ''} este mes` : 'Ningún vídeo este mes')),
+        h('div', { class: 'cal-grid' }, ...['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(t => h('span', { class: 'cal-wd' }, t)), ...cells)),
+      calUI.day ? h('div', { class: 'card cal-daylist' },
+        h('h3', { style: 'margin-top:0' }, `${Number(calUI.day.slice(8))} de ${MESES_CAL[Number(calUI.day.slice(5, 7)) - 1]} · ${dayList.length} vídeo${dayList.length > 1 ? 's' : ''}`),
+        h('div', { class: 'cal-vids' }, ...dayList.map(v => {
+          const c = chanById.get(v.channelId) || {};
+          const url = 'https://www.youtube.com/' + (v.short ? 'shorts/' : 'watch?v=') + v.vid;
+          return h('a', { class: 'cal-vid', href: url, target: '_blank', rel: 'noopener' },
+            h('span', { class: 'cal-thumb' }, h('img', { src: `https://i.ytimg.com/vi/${v.vid}/mqdefault.jpg`, loading: 'lazy', alt: '' }),
+              v.short ? h('span', { class: 'cal-dur' }, 'SHORT') : (v.vid in durations ? h('span', { class: 'cal-dur' }, fmtDurC(durations[v.vid])) : null)),
+            h('span', { class: 'cal-vinfo' }, h('b', {}, v.title),
+              h('small', {}, `${c.name || ''} · ${v.published.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`),
+              h('span', { class: 'cal-tags' }, ...(groupsOf.get(v.channelId) || []).map(g => h('span', { class: 'cal-tag' }, PG.iconEl(g, 14), g.name)))));
+        }))) : null);
+  };
+  const start = async () => {
+    box.replaceChildren(h('div', { class: 'card' }, h('div', { class: 'row busy-row' }, ui.spin, status), ui.bar));
+    ui.setBusy(true); ui.progress('Preparando…');
+    try { await loadCalendarData(ui.progress); ui.setBusy(false); draw(); }
+    catch (e) { ui.setBusy(false); status.className = 'msg err'; status.textContent = e.message; }
+  };
+  if (calData && Date.now() - calData.t < 15 * 60 * 1000) draw(); else start();
 }
 
 // ---------- Descubrir ----------

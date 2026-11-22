@@ -405,3 +405,18 @@ yt-flexible-actions-view-model .pg-chbtn{margin-left:8px;margin-top:0}
 .pg-cal-day.sel .pg-cal-avs small{color:#fff}
 .pg-cal-note{margin-top:10px;font-size:12px;color:var(--pg-mut)}
 .pg-compact .pg-cal-cell,.pg-list .pg-cal-cell{min-height:52px}
+
+/* Duración del vídeo sobre la miniatura */
+.pg-dur{position:absolute;right:6px;bottom:6px;z-index:2;background:rgba(0,0,0,.8);color:#fff;font:500 12px Roboto,Arial,sans-serif;padding:2px 6px;border-radius:4px;letter-spacing:.2px;pointer-events:none}
+.pg-watched .pg-dur{bottom:10px}
+
+/* «Nuevos vídeos» */
+.pg-markall{height:36px;padding:0 16px;border-radius:18px;border:0;background:var(--pg-grad);color:#fff;font:500 14px Roboto,Arial,sans-serif;cursor:pointer;white-space:nowrap;box-shadow:var(--pg-shadow)}
+.pg-markall:hover{filter:brightness(1.05)}
+.pg-new-entry .pg-guide-count{margin-left:auto}
+.pg-ov-head .pg-search{flex:0 1 220px;min-width:120px;width:auto}
+.pg-ov-head .pg-markall{flex:0 0 auto}
+.pg-virt .pg-ov-head{flex-wrap:nowrap}
+.pg-virt .pg-ov-head .pg-status{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pg-virt .pg-ov-head h2{white-space:nowrap}
+.pg-ov-head .pg-newcount{white-space:nowrap;flex:0 0 auto}

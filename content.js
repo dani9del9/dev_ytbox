@@ -2,6 +2,31 @@
 (() => {
   let state = { groups: [], channels: {}, settings: {} };
   const rssCache = new Map(); // id -> { t, items }
+  // Duraciones de los vídeos (el RSS no las trae): se sacan de la pestaña «Vídeos» del canal y se guardan
+  const durations = {}; // vid -> segundos
+  let durLoaded = chrome.storage.local.get('durations').then(r => Object.assign(durations, r.durations || {})).catch(() => {});
+  const durFetched = new Map(); // channelId -> momento en que se pidió (para no repetir en 30 min)
+  let durSaveTimer = null;
+  const saveDurations = () => {
+    clearTimeout(durSaveTimer);
+    durSaveTimer = setTimeout(() => {
+      const keys = Object.keys(durations);
+      if (keys.length > 8000) keys.slice(0, keys.length - 8000).forEach(k => delete durations[k]);
+      chrome.storage.local.set({ durations });
+    }, 1500);
+  };
+  async function ensureDurations(channelId, items) {
+    await durLoaded;
+    if (!items.some(v => !v.short && !(v.vid in durations))) return false;
+    const t = durFetched.get(channelId);
+    if (t && Date.now() - t < 30 * 60 * 1000) return false;
+    durFetched.set(channelId, Date.now());
+    const list = await YTAPI.channelVideos(channelId);
+    for (const v of list) durations[v.vid] = v.seconds;
+    saveDurations();
+    return true;
+  }
+  const fmtDuration = s => { s = Math.round(s); const hh = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60), ss = s % 60; return (hh ? hh + ':' + String(mm).padStart(2, '0') : mm) + ':' + String(ss).padStart(2, '0'); };
 
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -104,6 +129,7 @@
       if (m) for (const k of Object.keys(m)) if (m[k] === true) delete m[k];
       newCounts[g.id] = 0;
     }
+    newTotal = 0;
     await chrome.storage.local.set({ seen, marks });
     renderGuide(true);
     toast('Todo marcado como visto');
@@ -116,6 +142,9 @@
     if (!force && Date.now() - countingAt < 15 * 60 * 1000) return;
     countingAt = Date.now();
     const { seen = {}, marks = {}, watched = {} } = await chrome.storage.local.get(['seen', 'marks', 'watched']);
+    // Mismo filtro de tipo que dentro del grupo: si no tienes Shorts seleccionados, no cuentan
+    const type = state.settings.typeFilter || (state.settings.hideShorts ? 'videos' : 'all');
+    const typeOk = v => type === 'all' || (type === 'shorts') === !!v.short;
     // Un grupo que nunca se ha abierto empieza a contar novedades desde ahora
     const unseen = state.groups.filter(g => !seen[g.id]);
     if (unseen.length) { unseen.forEach(g => seen[g.id] = Date.now()); await chrome.storage.local.set({ seen }); }
@@ -123,6 +152,7 @@
     for (const g of state.groups) if (seen[g.id]) g.channels.forEach(k => { const c = state.channels[k]; c && c.id && ids.add(c.id); });
     const feed = {};
     await pool([...ids], 4, async id => { feed[id] = await fetchRss(id); });
+    const allNew = new Set();
     for (const g of state.groups) {
       const since = seen[g.id];
       if (!since) { newCounts[g.id] = 0; continue; }
@@ -132,11 +162,12 @@
         const c = state.channels[k];
         for (const v of (c && feed[c.id]) || []) {
           const isN = v.vid in m ? m[v.vid] : v.published.getTime() > since;
-          if (isN && !watched[v.vid]) n++;
+          if (isN && !watched[v.vid] && typeOk(v)) { n++; allNew.add(v.vid); }
         }
       }
       newCounts[g.id] = n;
     }
+    newTotal = allNew.size;
     renderGuide(true);
   }
 
@@ -147,6 +178,16 @@
     const ico = h('span', { class: 'pg-tv-top-ico pg-disc-ico' }, PG.svgEl('brujula', px, '#ffffff'));
     return h('a', { class: cls + ' pg-disc-entry', href: '#', title: 'Descubrir canales parecidos a los tuyos', onclick: e => { e.preventDefault(); close && close(); openDiscover(); } },
       inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, 'Descubrir'), h('span', { class: 'pg-tv-top-go' }, '✦'));
+  }
+
+  // Acceso a «Nuevos vídeos» (todos los nuevos de todos los grupos)
+  let newTotal = 0;
+  function newVideosEntry(cls, px, inGuide, close) {
+    const ico = h('span', { class: 'pg-tv-top-ico' }, PG.svgEl('nuevos', px, '#ffffff'));
+    return h('a', { class: cls + ' pg-new-entry', href: '#', title: newTotal ? `${newTotal} vídeos nuevos en tus grupos` : 'Todos los vídeos nuevos de tus grupos',
+      onclick: e => { e.preventDefault(); close && close(); openGroup(NEW_ID); } },
+      inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, 'Nuevos vídeos'),
+      newTotal ? h('span', { class: 'pg-guide-count' }, String(newTotal)) : h('span', { class: 'pg-tv-top-go' }, '›'));
   }
 
   // Preconfiguraciones del Modo TV como accesos directos (un clic = ver)
@@ -182,6 +223,7 @@
     // Acceso directo al Modo TV, arriba del todo
     m.append(...tvBlock('pg-guide-item pg-tv-top', 18, false, () => m.remove()),
       discoverEntry('pg-guide-item pg-tv-top', 18, false, () => m.remove()),
+      newVideosEntry('pg-guide-item pg-tv-top', 18, false, () => m.remove()),
       h('div', { class: 'pg-vsep' }));
     if (!state.groups.length) m.append(h('div', { class: 'pg-menu-empty' }, 'Aún no tienes grupos.'));
     groupRows(m, 24);
@@ -241,6 +283,7 @@
     // Modo TV, arriba del todo (se oculta junto con la lista al plegar YTBox)
     box.append(...tvBlock('pg-guide-item pg-tv-entry', 16, true),
       discoverEntry('pg-guide-item pg-tv-entry', 16, true),
+      newVideosEntry('pg-guide-item pg-tv-entry', 16, true),
       h('div', { class: 'pg-guide-sep' }));
     if (!state.groups.length) {
       box.append(h('div', { class: 'pg-guide-empty' }, 'Aún no tienes grupos. ', h('a', { href: '#', onclick: e => { e.preventDefault(); openManager('new'); } }, 'Crear uno')));
@@ -566,14 +609,22 @@
   window.addEventListener('resize', positionOverlay);
 
   // since: fecha de la visita anterior al grupo (para marcar novedades). Al recargar se mantiene.
+  // «Nuevos vídeos»: página que junta los nuevos de todos los grupos. No cambia las marcas de los grupos.
+  const NEW_ID = '__new';
+  const newPageGroup = () => {
+    const keys = new Set(); state.groups.forEach(gr => gr.channels.forEach(k => keys.add(k)));
+    return { id: NEW_ID, name: 'Nuevos vídeos', icon: { type: 'svg', value: 'nuevos', bg: true }, color: state.settings.color1 || '#ff6347', channels: [...keys] };
+  };
   async function openGroup(groupId, since) {
-    const g = state.groups.find(x => x.id === groupId);
+    const virt = groupId === NEW_ID;
+    const g = virt ? newPageGroup() : state.groups.find(x => x.id === groupId);
     if (!g) return;
     closeOverlay();
     overlayGroupId = groupId;
     overlayUrl = location.href;
     const seenAll = (await chrome.storage.local.get('seen')).seen || {};
-    if (since === undefined) since = seenAll[groupId] || 0;
+    if (virt) since = 0;
+    else if (since === undefined) since = seenAll[groupId] || 0;
     const st = state.settings;
     const filters = { channel: null, q: '', onlyNew: false,
       type: st.typeFilter || (st.hideShorts ? 'videos' : 'all'), // all | videos | shorts
@@ -583,7 +634,7 @@
       day: null };                                                // «2026-11-15»: día elegido en el calendario
     let mode = state.settings.playMode || 'todos';
     let selected = []; // ids en el orden en que se marcan
-    overlay = h('div', { id: 'pg-overlay' });
+    overlay = h('div', { id: 'pg-overlay', class: virt ? 'pg-virt' : '' });
     document.documentElement.classList.add('pg-noscroll');
     const status = h('span', { class: 'pg-status' }, 'Cargando…');
     const newCount = h('button', { class: 'pg-newcount', style: 'display:none;border:0;cursor:pointer', title: 'Mostrar solo los nuevos' });
@@ -606,7 +657,7 @@
     const periodSel = select([['all', 'Cualquier fecha'], ['day', 'Últimas 24 horas'], ['week', 'Última semana'], ['month', 'Último mes']], filters.period,
       v => { filters.period = v; render(); renderChips(); saveSetting('period', v); }, 'Fecha de subida');
     const typeSeg = segmented([['all', 'Todo'], ['videos', 'Vídeos'], ['shorts', 'Shorts']], () => filters.type,
-      v => { filters.type = v; render(); renderChips(); saveSetting('typeFilter', v); });
+      v => { filters.type = v; render(); renderChips(); saveSetting('typeFilter', v).then(() => updateNewCounts(true)); });
     const watchSeg = segmented([['all', 'Todos'], ['unwatched', 'No vistos']], () => filters.watch,
       v => { filters.watch = v; render(); renderChips(); saveSetting('watchFilter', v); });
     const applyView = () => {
@@ -632,7 +683,8 @@
       search,
       calBtn,
       h('button', { class: 'pg-btn', title: 'Recargar', onclick: () => { g.channels.forEach(k => { const c = state.channels[k]; c && c.id && rssCache.delete(c.id); }); openGroup(groupId, since); } }, '⟳'),
-      h('button', { class: 'pg-btn', title: 'Editar grupo', onclick: () => openManager('group=' + g.id) }, '✎'),
+      virt ? h('button', { class: 'pg-markall', title: 'Quita la etiqueta «Nuevo» de todos los vídeos en todos tus grupos', onclick: async () => { await markAllSeen(); openGroup(NEW_ID); } }, '✓ Marcar todos como vistos en los grupos')
+        : h('button', { class: 'pg-btn', title: 'Editar grupo', onclick: () => openManager('group=' + g.id) }, '✎'),
       h('button', { class: 'pg-btn', title: 'Cerrar (Esc)', onclick: closeOverlay }, '✕'));
     const chips = h('div', { class: 'pg-chips' });
     // Barra de reproducción: modo + botón para lanzar la cola
@@ -687,9 +739,15 @@
     const watched = stored.watched || {};
     const isWatched = v => !!watched[v.vid];
     const marksAll = stored.marks || {};
-    const marks = marksAll[groupId] || (marksAll[groupId] = {});
+    const marks = virt ? {} : (marksAll[groupId] || (marksAll[groupId] = {}));
     let queue = stored.queue || [];
-    const isNew = v => v.vid in marks ? marks[v.vid] : (since > 0 && v.published.getTime() > since);
+    // En «Nuevos vídeos», un vídeo es nuevo si lo es en alguno de los grupos de su canal (y no lo has visto)
+    const groupsByChannel = new Map();
+    if (virt) for (const gr of state.groups) for (const k of gr.channels) { const c = state.channels[k]; if (c && c.id) { if (!groupsByChannel.has(c.id)) groupsByChannel.set(c.id, []); groupsByChannel.get(c.id).push(gr.id); } }
+    const newIn = (gid, v) => { const m = marksAll[gid] || {}; const s = seenAll[gid] || 0; return v.vid in m ? m[v.vid] : (s > 0 && v.published.getTime() > s); };
+    const isNew = virt
+      ? v => !watched[v.vid] && (groupsByChannel.get(v.channelId) || []).some(gid => newIn(gid, v))
+      : v => v.vid in marks ? marks[v.vid] : (since > 0 && v.published.getTime() > since);
     const saveMarks = () => chrome.storage.local.set({ marks: marksAll });
     const updateQueue = () => {
       queueBox.style.display = queue.length ? '' : 'none';
@@ -713,8 +771,16 @@
         await saveQueue();
       },
       isNew,
-      toggleNew: async v => { marks[v.vid] = !isNew(v); await saveMarks(); render(); renderChips(); },
-      opened: v => { if (marks[v.vid] === true) { delete marks[v.vid]; saveMarks(); } },
+      toggleNew: async v => {
+        const val = !isNew(v);
+        if (virt) for (const gid of groupsByChannel.get(v.channelId) || []) (marksAll[gid] || (marksAll[gid] = {}))[v.vid] = val;
+        else marks[v.vid] = val;
+        await saveMarks(); render(); renderChips();
+      },
+      opened: v => {
+        if (virt) { let ch = false; for (const gid of groupsByChannel.get(v.channelId) || []) if (marksAll[gid] && marksAll[gid][v.vid] === true) { delete marksAll[gid][v.vid]; ch = true; } if (ch) saveMarks(); }
+        else if (marks[v.vid] === true) { delete marks[v.vid]; saveMarks(); }
+      },
       isWatched,
       toggleWatched: async v => {
         if (watched[v.vid]) delete watched[v.vid]; else watched[v.vid] = Date.now();
@@ -781,7 +847,7 @@
     };
     const visible = () => {
       const q = filters.q.toLowerCase();
-      const vids = all.filter(v => passNoDay(v) && (!filters.day || dayKey(v.published) === filters.day));
+      const vids = all.filter(v => passNoDay(v) && (!filters.day || dayKey(v.published) === filters.day) && (!virt || isNew(v)));
       const by = {
         new: (a, b) => b.published - a.published,
         old: (a, b) => a.published - b.published,
@@ -868,7 +934,7 @@
       newCount.style.display = n ? '' : 'none';
       newCount.textContent = filters.onlyNew ? `✓ ${n} nuevo${n > 1 ? 's' : ''}` : `${n} nuevo${n > 1 ? 's' : ''}`;
     };
-    newCount.onclick = () => { filters.onlyNew = !filters.onlyNew; render(); };
+    newCount.onclick = () => { if (virt) return; filters.onlyNew = !filters.onlyNew; render(); };
     // Avisos (no se borra nada): canales que llevan mucho sin subir o que hace tiempo que no ves
     const DAY = 864e5;
     const health = c => {
@@ -894,7 +960,7 @@
       const flags = { dormido: 0, ojoTachado: 0 };
       chips.replaceChildren(
         h('button', { class: 'pg-chip' + (!filters.channel ? ' on' : ''), onclick: () => { filters.channel = null; renderChips(); render(); } }, 'Todos'),
-        ...chans.filter(c => c.id).map(c => {
+        ...chans.filter(c => c.id && (!virt || all.some(v => v.channelId === c.id && isNew(v) && passBase(v)))).map(c => {
           const n = all.filter(v => v.channelId === c.id && isNew(v) && passBase(v)).length;
           const hl = health(c); if (hl) flags[hl.icon]++;
           return h('button', { class: 'pg-chip' + (filters.channel === c.id ? ' on' : '') + (hl ? ' pg-chip-flag' : ''), title: c.name + (hl ? ' · ' + hl.text : ''), onclick: () => { filters.channel = filters.channel === c.id ? null : c.id; renderChips(); render(); } },
@@ -915,13 +981,18 @@
     search.addEventListener('input', () => { filters.q = search.value; render(); });
     let timer;
     await pool(chans.filter(c => c.id), 6, async c => {
-      try { const items = await fetchRss(c.id); all = all.concat(items); }
+      let items = [];
+      try { items = await fetchRss(c.id); all = all.concat(items); }
       catch (e) { failed.add(c.id); throw e; }
       finally {
         done++;
         status.textContent = `Cargando ${done}/${chans.length}…`;
         clearTimeout(timer); timer = setTimeout(() => { render(); renderChips(); }, 120);
       }
+      // Duraciones en segundo plano: cuando llegan se repinta la cuadrícula
+      ensureDurations(c.id, items).then(changed => {
+        if (changed && overlayGroupId === groupId) { clearTimeout(timer); timer = setTimeout(() => render(), 200); }
+      }).catch(e => console.warn('[YTBox] duraciones', e));
     });
     if (overlayGroupId !== groupId) return;
     await histP;
@@ -932,6 +1003,7 @@
       for (const c of chans) { if (failed.has(c.id) || !c.id) continue; const hl = health(c); if (hl) chanHealth[c.key] = Object.assign({ t: Date.now() }, hl); else delete chanHealth[c.key]; }
       chrome.storage.local.set({ chanHealth });
     });
+    if (virt) return; // «Nuevos vídeos» no toca las marcas de los grupos
     // Guardar la visita: la próxima vez se marcarán los vídeos publicados después de ahora
     const seenNow = (await chrome.storage.local.get('seen')).seen || {};
     seenNow[groupId] = Date.now();
@@ -995,7 +1067,7 @@
         seenIt ? h('span', { class: 'pg-watched-bar' }) : null,
         !sel && ctx ? hoverActions(v, ctx) : null,
         check,
-        v.short ? h('span', { class: 'pg-badge' }, 'SHORT') : null),
+        v.short ? h('span', { class: 'pg-badge' }, 'SHORT') : (v.vid in durations ? h('span', { class: 'pg-dur' }, fmtDuration(durations[v.vid])) : null)),
       h('div', { class: 'pg-meta' },
         ch && ch.avatar ? h('img', { class: 'pg-avatar', src: ch.avatar, referrerpolicy: 'no-referrer' }) : h('span', { class: 'pg-avatar' }),
         h('div', {},
