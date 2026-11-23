@@ -22,6 +22,13 @@ const YTBoxDiscover = (() => {
     const missing = chans.filter(c => !c.id);
     if (missing.length) { onStatus(`Buscando ${missing.length} canales…`); await pool(missing, 4, c => PG.ensureChannelId(c)); await PG.save({ channels: state.channels }); }
     const sample = shuffle(chans.filter(c => c.id)).slice(0, 12);
+    // Nombres reales de los canales de partida que solo tienen el código (UC…)
+    const unnamed = sample.filter(c => YTAPI.needsName(c));
+    if (unnamed.length) {
+      onStatus(`Completando nombres de ${unnamed.length} canales…`);
+      await pool(unnamed, 4, async c => { const n = await YTAPI.channelName(c.id); if (n) c.name = n; });
+      await PG.save({ channels: state.channels });
+    }
     // De cada canal: su último vídeo y otro al azar de los recientes
     const seeds = []; let done = 0, lastErr = null;
     await pool(sample, 4, async c => {
@@ -37,7 +44,7 @@ const YTBoxDiscover = (() => {
     const known = knownSet(state);
     const ignored = new Set((state.settings.discoverIgnored || []).map(x => String(x).toLowerCase()));
     const found = new Map(); done = 0;
-    await pool(seeds, 4, async s => {
+    await pool(seeds, 2, async s => {
       try {
         for (const r of await YTAPI.related(s.vid)) {
           const id = r.channelId;

@@ -420,3 +420,24 @@ yt-flexible-actions-view-model .pg-chbtn{margin-left:8px;margin-top:0}
 .pg-virt .pg-ov-head .pg-status{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pg-virt .pg-ov-head h2{white-space:nowrap}
 .pg-ov-head .pg-newcount{white-space:nowrap;flex:0 0 auto}
+
+/* Chips de grupo en las tarjetas de «Nuevos vídeos» */
+.pg-card-groups{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.pg-card-group{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px 0 5px;border-radius:12px;border:1px solid var(--pg-line);background:var(--pg-panel2);color:var(--pg-txt);font:500 12px Roboto,Arial,sans-serif;cursor:pointer;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pg-card-group:hover{border-color:var(--pg-acc);color:var(--pg-acc)}
+
+/* Chips de canales sueltos elegidos (Modo TV y Descubrir) */
+.pg-selchips{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0 4px;max-height:156px;overflow:auto;padding:2px}
+.pg-selchips-label{font-size:13px;color:var(--pg-mut);margin-right:2px}
+.pg-selchip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 4px 0 4px;border-radius:15px;background:var(--pg-acc-soft);border:1px solid color-mix(in srgb,var(--pg-acc) 35%,transparent);font:500 13px Roboto,Arial,sans-serif;color:var(--pg-txt);max-width:240px}
+.pg-selchip img,.pg-selchip .pg-tv-av{width:22px;height:22px;border-radius:50%;object-fit:cover;flex:0 0 22px}
+.pg-selchip-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pg-selchip-x{flex:0 0 22px;width:22px;height:22px;border:0;border-radius:50%;background:transparent;color:var(--pg-mut);font-size:16px;line-height:1;cursor:pointer;padding:0}
+.pg-selchip-x:hover{background:#d93a2b;color:#fff}
+.pg-selchip-all{height:30px;padding:0 12px;border-radius:15px;border:1px solid var(--pg-line);background:var(--pg-bg);color:var(--pg-txt);font:500 13px Roboto,Arial,sans-serif;cursor:pointer}
+.pg-selchip-all:hover{border-color:#d93a2b;color:#d93a2b}
+
+/* Flecha de Modo TV / Descubrir / Nuevos vídeos: igual en las tres */
+.pg-tv-top-go{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;color:var(--pg-mut);flex:0 0 22px;font-size:0}
+.pg-tv-top-go svg{width:16px;height:16px;stroke-width:2.4}
+.pg-guide-item:hover .pg-tv-top-go,.pg-tv-top:hover .pg-tv-top-go{color:var(--pg-acc)}

@@ -132,26 +132,43 @@
     newTotal = 0;
     await chrome.storage.local.set({ seen, marks });
     renderGuide(true);
+    saveCountsCache();
     toast('Todo marcado como visto');
   }
 
   // ---------- Novedades por grupo (para la barra lateral) ----------
   const newCounts = {};
   let countingAt = 0;
-  async function updateNewCounts(force) {
-    if (!force && Date.now() - countingAt < 15 * 60 * 1000) return;
-    countingAt = Date.now();
-    const { seen = {}, marks = {}, watched = {} } = await chrome.storage.local.get(['seen', 'marks', 'watched']);
-    // Mismo filtro de tipo que dentro del grupo: si no tienes Shorts seleccionados, no cuentan
+  // Los últimos números se guardan para pintarlos al instante al cargar YouTube
+  const saveCountsCache = () => chrome.storage.local.set({ newCountsCache: { t: Date.now(), counts: Object.assign({}, newCounts), total: newTotal } }).catch(() => {});
+  chrome.storage.local.get('newCountsCache').then(({ newCountsCache: c }) => {
+    if (!c || Date.now() - c.t > 12 * 3600e3 || countingAt) return;
+    Object.assign(newCounts, c.counts || {}); newTotal = c.total || 0;
+    renderGuide(true);
+  }).catch(() => {});
+
+  // Cualquier RSS leído (al abrir un grupo, «Nuevos vídeos», el recuento…) actualiza también los contadores
+  const pendingLite = {};
+  let feedSyncTimer = null;
+  function feedUpdated(id, items) {
+    lastFeed[id] = items;
+    pendingLite[id] = { t: Date.now(), v: items.map(v => [v.vid, v.published.getTime(), v.short ? 1 : 0]) };
+    clearTimeout(feedSyncTimer);
+    feedSyncTimer = setTimeout(async () => {
+      try {
+        const { feedLite = {} } = await chrome.storage.local.get('feedLite');
+        Object.assign(feedLite, pendingLite); for (const k in pendingLite) delete pendingLite[k];
+        await chrome.storage.local.set({ feedLite });
+        await quickRecount();
+      } catch (e) { console.warn('[YTBox] contadores', e); }
+    }, 1200);
+  }
+
+  // Cálculo de los números a partir de lo leído (sin descargar nada)
+  let lastFeed = {}; // channelId -> [{ vid, published, short }]
+  function computeCounts(feed, seen, marks, watched) {
     const type = state.settings.typeFilter || (state.settings.hideShorts ? 'videos' : 'all');
     const typeOk = v => type === 'all' || (type === 'shorts') === !!v.short;
-    // Un grupo que nunca se ha abierto empieza a contar novedades desde ahora
-    const unseen = state.groups.filter(g => !seen[g.id]);
-    if (unseen.length) { unseen.forEach(g => seen[g.id] = Date.now()); await chrome.storage.local.set({ seen }); }
-    const ids = new Set();
-    for (const g of state.groups) if (seen[g.id]) g.channels.forEach(k => { const c = state.channels[k]; c && c.id && ids.add(c.id); });
-    const feed = {};
-    await pool([...ids], 4, async id => { feed[id] = await fetchRss(id); });
     const allNew = new Set();
     for (const g of state.groups) {
       const since = seen[g.id];
@@ -170,14 +187,63 @@
     newTotal = allNew.size;
     renderGuide(true);
   }
+  const liteToFeed = feedLite => Object.fromEntries(Object.entries(feedLite || {}).map(([id, f]) => [id, (f.v || []).map(([vid, ms, short]) => ({ vid, published: new Date(ms), short: !!short }))]));
+  // Recalcular ya (al entrar en un grupo, ver un vídeo, marcar…): usa lo ya leído, nunca espera descargas
+  async function quickRecount() {
+    const { seen = {}, marks = {}, watched = {}, feedLite = {} } = await chrome.storage.local.get(['seen', 'marks', 'watched', 'feedLite']);
+    computeCounts(Object.assign(liteToFeed(feedLite), lastFeed), seen, marks, watched);
+    saveCountsCache();
+  }
+
+  // Recuento completo: vuelve a leer los RSS (cada 15 min como mucho)
+  let counting = null;
+  function updateNewCounts(force) {
+    if (counting) return counting;
+    counting = updateNewCountsNow(force).catch(e => console.warn('[YTBox] contadores', e)).finally(() => { counting = null; });
+    return counting;
+  }
+  async function updateNewCountsNow(force) {
+    if (!force && Date.now() - countingAt < 15 * 60 * 1000) return;
+    countingAt = Date.now();
+    const { seen = {}, feedLite = {} } = await chrome.storage.local.get(['seen', 'feedLite']);
+    // Un grupo que nunca se ha abierto empieza a contar novedades desde ahora
+    const unseen = state.groups.filter(g => !seen[g.id]);
+    if (unseen.length) { unseen.forEach(g => seen[g.id] = Date.now()); await chrome.storage.local.set({ seen }); }
+    const ids = new Set();
+    for (const g of state.groups) g.channels.forEach(k => { const c = state.channels[k]; c && c.id && ids.add(c.id); });
+    // Lo leído en los últimos 10 min (en esta pestaña u otra) no se vuelve a pedir
+    const toFetch = [];
+    for (const id of ids) {
+      const f = feedLite[id];
+      if (f && Date.now() - f.t < 10 * 60 * 1000) lastFeed[id] = liteToFeed({ [id]: f })[id];
+      else toFetch.push(id);
+    }
+    await quickRecount();
+    // Mientras se leen los canales, los números se van actualizando (sin esperar a todos)
+    let dirty = false;
+    const tick = setInterval(() => { if (dirty) { dirty = false; quickRecount().catch(() => {}); } }, 1200);
+    try {
+      await pool(toFetch, 8, async id => {
+        const items = await fetchRss(id); // fetchRss ya los apunta en lastFeed
+        dirty = true;
+        feedLite[id] = { t: Date.now(), v: items.map(v => [v.vid, v.published.getTime(), v.short ? 1 : 0]) };
+      });
+    } finally { clearInterval(tick); }
+    for (const id of Object.keys(feedLite)) if (!ids.has(id)) delete feedLite[id];
+    await chrome.storage.local.set({ feedLite }).catch(() => {});
+    await quickRecount();
+  }
 
   // Botón de YTBox en la barra superior de YouTube (junto a «Crear» y las notificaciones):
   // siempre visible, abre la lista de grupos. Sustituye al antiguo botón flotante.
+  // Misma flechita a la derecha en Modo TV, Descubrir y Nuevos vídeos
+  const goArrow = () => h('span', { class: 'pg-tv-top-go' }, PG.svgEl('chevron', 16, 'currentColor'));
+
   // Acceso al modo Descubrir (barra lateral y desplegable superior)
   function discoverEntry(cls, px, inGuide, close) {
     const ico = h('span', { class: 'pg-tv-top-ico pg-disc-ico' }, PG.svgEl('brujula', px, '#ffffff'));
     return h('a', { class: cls + ' pg-disc-entry', href: '#', title: 'Descubrir canales parecidos a los tuyos', onclick: e => { e.preventDefault(); close && close(); openDiscover(); } },
-      inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, 'Descubrir'), h('span', { class: 'pg-tv-top-go' }, '✦'));
+      inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, 'Descubrir'), goArrow());
   }
 
   // Acceso a «Nuevos vídeos» (todos los nuevos de todos los grupos)
@@ -187,7 +253,7 @@
     return h('a', { class: cls + ' pg-new-entry', href: '#', title: newTotal ? `${newTotal} vídeos nuevos en tus grupos` : 'Todos los vídeos nuevos de tus grupos',
       onclick: e => { e.preventDefault(); close && close(); openGroup(NEW_ID); } },
       inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, 'Nuevos vídeos'),
-      newTotal ? h('span', { class: 'pg-guide-count' }, String(newTotal)) : h('span', { class: 'pg-tv-top-go' }, '›'));
+      newTotal ? h('span', { class: 'pg-guide-count' }, String(newTotal)) : goArrow());
   }
 
   // Preconfiguraciones del Modo TV como accesos directos (un clic = ver)
@@ -207,7 +273,7 @@
     paint();
     const row = h('a', { class: cls, href: '#', title: 'Modo TV: lista aleatoria de tus canales', onclick: e => { e.preventDefault(); close && close(); openTV(); } },
       inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, 'Modo TV'),
-      presets.length ? caret : h('span', { class: 'pg-tv-top-go' }, '▶'));
+      presets.length ? caret : goArrow());
     return presets.length ? [row, list] : [row];
   }
 
@@ -543,7 +609,11 @@
   async function fetchRss(id) {
     const c = rssCache.get(id);
     if (c && Date.now() - c.t < 10 * 60 * 1000) return c.items;
-    const res = await PG.fetch('https://www.youtube.com/feeds/videos.xml?channel_id=' + id, { credentials: 'include' });
+    // Máximo 12 s: una petición colgada no puede bloquear nada
+    const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 12000);
+    let res;
+    try { res = await PG.fetch('https://www.youtube.com/feeds/videos.xml?channel_id=' + id, { credentials: 'include', signal: ctrl.signal }); }
+    finally { clearTimeout(to); }
     if (!res.ok || res.url.includes('consent.')) throw new Error('RSS ' + res.status);
     const xml = new DOMParser().parseFromString(await res.text(), 'text/xml');
     const items = Array.from(xml.getElementsByTagName('entry')).map(e => {
@@ -561,6 +631,7 @@
       };
     });
     rssCache.set(id, { t: Date.now(), items });
+    feedUpdated(id, items);
     return items;
   }
 
@@ -657,7 +728,7 @@
     const periodSel = select([['all', 'Cualquier fecha'], ['day', 'Últimas 24 horas'], ['week', 'Última semana'], ['month', 'Último mes']], filters.period,
       v => { filters.period = v; render(); renderChips(); saveSetting('period', v); }, 'Fecha de subida');
     const typeSeg = segmented([['all', 'Todo'], ['videos', 'Vídeos'], ['shorts', 'Shorts']], () => filters.type,
-      v => { filters.type = v; render(); renderChips(); saveSetting('typeFilter', v).then(() => updateNewCounts(true)); });
+      v => { filters.type = v; render(); renderChips(); saveSetting('typeFilter', v).then(() => quickRecount()); });
     const watchSeg = segmented([['all', 'Todos'], ['unwatched', 'No vistos']], () => filters.watch,
       v => { filters.watch = v; render(); renderChips(); saveSetting('watchFilter', v); });
     const applyView = () => {
@@ -771,11 +842,13 @@
         await saveQueue();
       },
       isNew,
+      // En «Nuevos vídeos»: los grupos donde este vídeo es nuevo (para los chips de cada tarjeta)
+      groupsOf: virt ? v => (groupsByChannel.get(v.channelId) || []).filter(gid => newIn(gid, v)).map(gid => state.groups.find(x => x.id === gid)).filter(Boolean) : null,
       toggleNew: async v => {
         const val = !isNew(v);
         if (virt) for (const gid of groupsByChannel.get(v.channelId) || []) (marksAll[gid] || (marksAll[gid] = {}))[v.vid] = val;
         else marks[v.vid] = val;
-        await saveMarks(); render(); renderChips();
+        await saveMarks(); render(); renderChips(); quickRecount().catch(() => {});
       },
       opened: v => {
         if (virt) { let ch = false; for (const gid of groupsByChannel.get(v.channelId) || []) if (marksAll[gid] && marksAll[gid][v.vid] === true) { delete marksAll[gid][v.vid]; ch = true; } if (ch) saveMarks(); }
@@ -784,7 +857,7 @@
       isWatched,
       toggleWatched: async v => {
         if (watched[v.vid]) delete watched[v.vid]; else watched[v.vid] = Date.now();
-        await chrome.storage.local.set({ watched }); render(); renderChips();
+        await chrome.storage.local.set({ watched }); render(); renderChips(); quickRecount().catch(() => {});
       },
     };
     const PERIOD = { day: 864e5, week: 7 * 864e5, month: 30 * 864e5 };
@@ -1003,14 +1076,19 @@
       for (const c of chans) { if (failed.has(c.id) || !c.id) continue; const hl = health(c); if (hl) chanHealth[c.key] = Object.assign({ t: Date.now() }, hl); else delete chanHealth[c.key]; }
       chrome.storage.local.set({ chanHealth });
     });
-    if (virt) return; // «Nuevos vídeos» no toca las marcas de los grupos
-    // Guardar la visita: la próxima vez se marcarán los vídeos publicados después de ahora
-    const seenNow = (await chrome.storage.local.get('seen')).seen || {};
-    seenNow[groupId] = Date.now();
-    await chrome.storage.local.set({ seen: seenNow });
-    newCounts[groupId] = 0; renderGuide(true);
-    // Completar avatar, nombre y @usuario de canales que solo tienen id (p. ej. importados de PocketTube)
-    const incomplete = chans.filter(c => c.id && (!c.avatar || !c.handle || c.name === c.id));
+    if (!virt) {
+      // Guardar la visita: la próxima vez se marcarán los vídeos publicados después de ahora
+      const seenNow = (await chrome.storage.local.get('seen')).seen || {};
+      seenNow[groupId] = Date.now();
+      await chrome.storage.local.set({ seen: seenNow });
+      newCounts[groupId] = 0; renderGuide(true); saveCountsCache();
+      quickRecount().catch(() => {}); // recalcula el total de «Nuevos vídeos» (con los datos ya guardados)
+    } // «Nuevos vídeos» no toca las marcas de los grupos
+    // Completar avatar, nombre y @usuario de canales que solo tienen id (p. ej. importados de PocketTube).
+    // En «Nuevos vídeos», solo los canales que tienen algo nuevo
+    const incomplete = chans.filter(c => c.id && (!c.avatar || !c.handle || c.name === c.id) && (!virt || all.some(v => v.channelId === c.id && isNew(v))));
+    // Nombre al momento con lo que trae el RSS
+    for (const c of incomplete) if (c.name === c.id) { const v = all.find(x => x.channelId === c.id && x.author); if (v) c.name = v.author; }
     if (incomplete.length) {
       await pool(incomplete, 3, async c => {
         const r = await PG.resolveChannel(c.id);
@@ -1074,6 +1152,8 @@
           h('div', { class: 'pg-title', title: v.title }, v.title),
           h('div', { class: 'pg-sub' }, v.author),
           h('div', { class: 'pg-sub' }, (v.views ? PG.fmtViews(v.views) + ' · ' : '') + PG.relTime(v.published)),
+          ctx && ctx.groupsOf ? h('div', { class: 'pg-card-groups' }, ...ctx.groupsOf(v).map(g => h('button', { class: 'pg-card-group', title: 'Abrir el grupo «' + g.name + '»',
+            onclick: e => { e.preventDefault(); e.stopPropagation(); openGroup(g.id); } }, PG.iconEl(g, 14), g.name))) : null,
           v.desc ? h('div', { class: 'pg-desc' }, v.desc.slice(0, 300)) : null),
         !sel && ctx ? h('button', { class: 'pg-dots', title: 'Más acciones', onclick: e => { e.preventDefault(); e.stopPropagation(); openVideoMenu(e.currentTarget, v, ctx); } }, '⋮') : null));
     if (!sel && ctx) a.addEventListener('click', () => ctx.opened(v));
@@ -1211,6 +1291,7 @@
     const keys = Object.keys(watched);
     if (keys.length > 5000) keys.sort((a, b) => watched[a] - watched[b]).slice(0, keys.length - 5000).forEach(k => delete watched[k]);
     await chrome.storage.local.set({ watched });
+    quickRecount().catch(() => {}); // si era nuevo, baja el contador
   }
 
   // Historial de YouTube (con sesión): se guarda 6 horas para no pedirlo cada vez
@@ -1225,6 +1306,26 @@
   }
 
   setTimeout(() => loadHistory().catch(() => {}), 8000);
+  // Abierto desde el gestor con «Abrir Descubrir en YouTube»
+  if (location.hash === '#ytbox-descubrir') {
+    history.replaceState(null, '', location.pathname + location.search);
+    setTimeout(() => openDiscover(), 1500);
+  }
+
+  // Reparar en segundo plano los canales que tienen un código (UC…) en vez de nombre
+  async function healChannelNames() {
+    const list = Object.values(state.channels).filter(c => c.id && YTAPI.needsName(c)).slice(0, 150);
+    if (!list.length) return;
+    let fixed = 0;
+    await pool(list, 4, async c => {
+      const cached = rssCache.get(c.id);
+      const fromRss = cached && cached.items.find(v => v.author);
+      const n = fromRss ? fromRss.author : await YTAPI.channelName(c.id);
+      if (n) { c.name = n; fixed++; }
+    });
+    if (fixed) { await PG.save({ channels: state.channels }); console.info(`[YTBox] ${fixed} nombres de canal completados`); }
+  }
+  setTimeout(() => healChannelNames().catch(e => console.warn('[YTBox] nombres', e)), 12000);
 
   // Qué canales ves: al abrir un vídeo se apunta la fecha en chanViews[clave del canal]
   let lastChanVid = null;
@@ -1337,11 +1438,13 @@
     const q = h('input', { type: 'search', class: 'pg-search', placeholder: 'Buscar canal…', style: 'width:100%;box-sizing:border-box' });
     const clist = h('div', { class: 'pg-tv-clist' });
     const allCh = Object.values(state.channels).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+    const sel = selectedChips(chansSel, () => { drawCh(); updateCount(); });
     const drawCh = () => {
+      sel.draw();
       const t = q.value.toLowerCase();
       clist.replaceChildren(...allCh.filter(c => !t || c.name.toLowerCase().includes(t) || (c.handle || '').includes(t)).slice(0, 300).map(c => {
         const cb = h('input', { type: 'checkbox' }); cb.checked = chansSel.has(c.key);
-        cb.addEventListener('change', () => { cb.checked ? chansSel.add(c.key) : chansSel.delete(c.key); updateCount(); });
+        cb.addEventListener('change', () => { cb.checked ? chansSel.add(c.key) : chansSel.delete(c.key); updateCount(); sel.draw(); });
         return h('label', { class: 'pg-tv-ch' }, cb, c.avatar ? h('img', { src: c.avatar, referrerpolicy: 'no-referrer' }) : h('span', { class: 'pg-tv-av' }), h('span', {}, c.name));
       }));
     };
@@ -1509,7 +1612,7 @@
         h('button', { class: 'pg-btn', title: 'Cerrar (Esc)', 'aria-label': 'Cerrar', onclick: () => root.remove() }, '✕')),
       h('p', { class: 'pg-tv-intro' }, 'Crea una lista con vídeos al azar de los canales que elijas y la reproduce, con la duración total que indiques.'),
       h('section', {}, h('h3', {}, 'Mis preconfiguraciones'), presetBox),
-      h('section', {}, h('h3', {}, '¿De qué canales?'), gchips, details, count),
+      h('section', {}, h('h3', {}, '¿De qué canales?'), gchips, sel.box, details, count),
       h('section', {}, h('h3', {}, '¿Qué vídeos?'),
         h('label', { class: 'pg-toggle' }, onlyNew, 'Solo vídeos que no he visto'),
         h('div', { class: 'pg-tv-row' }, h('span', {}, 'Subidos en'), ageSel),
@@ -1526,6 +1629,23 @@
     const pre = presetId && YTBoxTV.presets(state).find(x => x.id === presetId);
     if (pre) loadPreset(pre);
     setTimeout(() => { go.focus(); if (pre && autoplay) go.click(); }, 0);
+  }
+
+  // Chips con los canales sueltos elegidos (× para quitar uno, «Quitar todos») — Modo TV y Descubrir
+  function selectedChips(set, onChange) {
+    const box = h('div', { class: 'pg-selchips' });
+    const draw = () => {
+      const list = [...set].map(k => state.channels[k]).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+      box.style.display = list.length ? '' : 'none';
+      box.replaceChildren(
+        h('span', { class: 'pg-selchips-label' }, `Canales sueltos (${list.length}):`),
+        ...list.map(c => h('span', { class: 'pg-selchip' },
+          c.avatar ? h('img', { src: c.avatar, referrerpolicy: 'no-referrer', alt: '' }) : h('span', { class: 'pg-tv-av' }),
+          h('span', { class: 'pg-selchip-name' }, c.name),
+          h('button', { class: 'pg-selchip-x', title: 'Quitar', 'aria-label': 'Quitar ' + c.name, onclick: () => { set.delete(c.key); onChange(); } }, '×'))),
+        ...(list.length > 1 ? [h('button', { class: 'pg-selchip-all', onclick: () => { set.clear(); onChange(); } }, 'Quitar todos')] : []));
+    };
+    return { box, draw };
   }
 
   // ---------- Modo Descubrir: canales parecidos que aún no tienes ----------
@@ -1551,11 +1671,13 @@
     const q = h('input', { type: 'search', class: 'pg-search', placeholder: 'Buscar canal…', style: 'width:100%;box-sizing:border-box' });
     const clist = h('div', { class: 'pg-tv-clist' });
     const allCh = Object.values(state.channels).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+    const sel = selectedChips(chansSel, () => { drawCh(); updateCount(); });
     const drawCh = () => {
+      sel.draw();
       const t = q.value.toLowerCase();
       clist.replaceChildren(...allCh.filter(c => !t || c.name.toLowerCase().includes(t) || (c.handle || '').includes(t)).slice(0, 300).map(c => {
         const cb = h('input', { type: 'checkbox' }); cb.checked = chansSel.has(c.key);
-        cb.addEventListener('change', () => { cb.checked ? chansSel.add(c.key) : chansSel.delete(c.key); updateCount(); });
+        cb.addEventListener('change', () => { cb.checked ? chansSel.add(c.key) : chansSel.delete(c.key); updateCount(); sel.draw(); });
         return h('label', { class: 'pg-tv-ch' }, cb, c.avatar ? h('img', { src: c.avatar, referrerpolicy: 'no-referrer' }) : h('span', { class: 'pg-tv-av' }), h('span', {}, c.name));
       }));
     };
@@ -1640,7 +1762,7 @@
       h('div', { class: 'pg-tv-head' }, h('span', { class: 'pg-tv-ico' }, PG.svgEl('brujula', 26, 'currentColor')), h('h2', {}, 'Descubrir'),
         h('button', { class: 'pg-btn', title: 'Cerrar (Esc)', 'aria-label': 'Cerrar', onclick: () => root.remove() }, '✕')),
       h('p', { class: 'pg-tv-intro' }, 'Elige tus canales y te sugiero canales parecidos que aún no tienes en YTBox: los que más aparecen en los vídeos relacionados de los tuyos.'),
-      h('section', {}, h('h3', {}, '¿A partir de qué canales?'), gchips, details, count),
+      h('section', {}, h('h3', {}, '¿A partir de qué canales?'), gchips, sel.box, details, count),
       h('div', { class: 'pg-tv-foot' }, spin, status, go),
       bar,
       results);
@@ -1705,7 +1827,20 @@
   function safe(fn, ...a) { try { fn(...a); } catch (e) { console.error('[YTBox]', e); } }
   function tick() { renderGuide(false); safe(updateFab); safe(decorateChannelList, false); safe(positionOverlay); safe(decorateFeed); recordWatched().catch(() => {}); recordChannelView().catch(() => {}); }
   document.addEventListener('yt-navigate-finish', () => { $('#pg-menu')?.remove(); setTimeout(tick, 300); setTimeout(tick, 1500); });
-  chrome.runtime.onMessage.addListener(msg => { if (msg.type === 'openGroup') openGroup(msg.id); });
+  chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+    if (msg.type === 'openGroup') openGroup(msg.id);
+    // El gestor pide a esta pestaña de YouTube que haga una consulta a YouTube por él
+    if (msg.type === 'ytbox-fetch' && sender.id === chrome.runtime.id && /^https:\/\/www\.youtube\.com\/youtubei\//.test(msg.url)) {
+      const o = msg.opts || {};
+      const headers = Object.assign({}, o.headers || {});
+      (async () => {
+        if (o.auth && YTAPI.loggedIn()) { try { const json = await YTAPI.signedCall(msg.url, o.body); return { ok: true, status: 200, text: JSON.stringify(json) }; } catch {} }
+        const r = await PG.fetch(msg.url, { method: o.method || 'GET', headers, body: o.body, credentials: o.credentials || 'include' });
+        return { ok: r.ok, status: r.status, text: await r.text() };
+      })().then(reply, e => reply({ error: String(e && e.message || e) }));
+      return true;
+    }
+  });
   refresh().then(() => { setInterval(tick, 1500); setTimeout(() => updateNewCounts().catch(() => {}), 2500); setInterval(() => updateNewCounts().catch(() => {}), 5 * 60 * 1000); });
 
   // Abrir grupo desde URL (?pg_group=id), p. ej. desde el gestor

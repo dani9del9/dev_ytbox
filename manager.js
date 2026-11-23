@@ -1,4 +1,23 @@
 // YTBox — gestor de grupos
+// Las consultas a YouTube (youtubei) desde el gestor las hace, si la hay, una pestaña de YouTube abierta:
+// así salen desde youtube.com con tu sesión, igual que desde la propia web. Si no hay ninguna, se hacen directamente.
+(() => {
+  const direct = PG.fetch;
+  PG.fetch = async (url, opts = {}) => {
+    if (/^https:\/\/www\.youtube\.com\/youtubei\//.test(String(url))) {
+      try {
+        const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*' });
+        for (const t of tabs) {
+          try {
+            const r = await chrome.tabs.sendMessage(t.id, { type: 'ytbox-fetch', url: String(url), opts: { method: opts.method, headers: opts.headers, body: opts.body, credentials: opts.credentials, auth: opts.credentials !== 'omit' } });
+            if (r && !r.error) return new Response(r.text, { status: r.status || 200, headers: { 'Content-Type': 'application/json' } });
+          } catch {}
+        }
+      } catch {}
+    }
+    return direct(url, opts);
+  };
+})();
 let state = { groups: [], channels: {}, settings: {} };
 let view = { name: 'group', id: null };
 
@@ -80,6 +99,7 @@ function route() {
   else if (hash === 'tv') view = { name: 'tv' };
   else if (hash === 'discover') view = { name: 'discover' };
   else if (hash === 'calendar') view = { name: 'calendar' };
+  else if (hash === 'help' || hash.startsWith('help=')) view = { name: 'help', section: hash.split('=')[1] || '' };
   render();
 }
 window.addEventListener('hashchange', route);
@@ -125,11 +145,13 @@ function render() {
   renderSide();
   const main = $('#main');
   main.replaceChildren();
+  main.dataset.view = view.name; // Modo TV, Descubrir, Calendario y Ayuda usan más ancho
   if (view.name === 'channels') return renderChannels(main);
   if (view.name === 'settings') return renderSettings(main);
   if (view.name === 'tv') return renderTV(main);
   if (view.name === 'discover') return renderDiscover(main);
   if (view.name === 'calendar') return renderCalendar(main);
+  if (view.name === 'help') return renderHelp(main);
   let g = state.groups.find(x => x.id === view.id);
   if (!g && state.groups.length) { g = state.groups[0]; view.id = g.id; renderSide(); }
   if (!g) {
@@ -452,9 +474,61 @@ function busyUI(go, status, idleLabel, busyLabel) {
   return { spin, bar, progress, setBusy };
 }
 
+// Chips con los canales sueltos elegidos (× para quitar uno, «Quitar todos») — Modo TV y Descubrir
+function selectedChips(set, onChange) {
+  const box = h('div', { class: 'selchips' });
+  const draw = () => {
+    const list = [...set].map(k => state.channels[k]).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+    box.style.display = list.length ? '' : 'none';
+    box.replaceChildren(
+      h('span', { class: 'selchips-label' }, `Canales sueltos (${list.length}):`),
+      ...list.map(c => h('span', { class: 'selchip' }, avatarEl(c), h('span', { class: 'selchip-name' }, c.name),
+        h('button', { class: 'selchip-x', title: 'Quitar', 'aria-label': 'Quitar ' + c.name, onclick: () => { set.delete(c.key); onChange(); } }, '×'))),
+      ...(list.length > 1 ? [h('button', { class: 'selchip-all', onclick: () => { set.clear(); onChange(); } }, 'Quitar todos')] : []));
+  };
+  return { box, draw };
+}
+
 function modeIcon(name, size) {
   const small = size === 'small';
   return h('span', { class: 'mode-ico' + (small ? ' small' : '') }, PG.svgEl(name, small ? 14 : 24, '#ffffff'));
+}
+
+// ---------- Ayuda ----------
+function richText(t) {
+  // **negrita** → <b>
+  const out = []; const re = /\*\*(.+?)\*\*/g; let last = 0, m;
+  while ((m = re.exec(t))) { if (m.index > last) out.push(t.slice(last, m.index)); out.push(h('b', {}, m[1])); last = re.lastIndex; }
+  if (last < t.length) out.push(t.slice(last));
+  return out;
+}
+function renderHelp(main) {
+  const q = h('input', { type: 'search', placeholder: 'Buscar en la ayuda…', class: 'help-search' });
+  const toc = h('nav', { class: 'help-toc', 'aria-label': 'Índice de la ayuda' });
+  const body = h('div', { class: 'help-body' });
+  const blockEl = b => {
+    if (typeof b === 'string') return h('p', {}, ...richText(b));
+    if (b[0] === 'ul') return h('ul', {}, ...b.slice(1).map(li => h('li', {}, ...richText(li))));
+    if (b[0] === 'tip') return h('div', { class: 'help-tip' }, h('span', { class: 'help-tip-ico' }, '💡'), h('p', {}, ...richText(b[1])));
+    return null;
+  };
+  const textOf = s => (s.title + ' ' + JSON.stringify(s.blocks)).toLowerCase().replace(/\*\*/g, '');
+  const draw = () => {
+    const t = q.value.trim().toLowerCase();
+    const list = YTBOX_HELP.filter(s => !t || textOf(s).includes(t));
+    toc.replaceChildren(...list.map(s => h('a', { href: '#help=' + s.id, onclick: e => { e.preventDefault(); $('#help-' + s.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } },
+      h('span', { class: 'mode-ico small plain' }, PG.svgEl(s.icon, 16, 'currentColor')), s.title)));
+    body.replaceChildren(...(list.length ? list.map(s => h('section', { class: 'card help-sec', id: 'help-' + s.id },
+      h('h2', {}, h('span', { class: 'mode-ico' }, PG.svgEl(s.icon, 22, '#ffffff')), s.title), ...s.blocks.map(blockEl).filter(Boolean)))
+      : [h('div', { class: 'card muted' }, 'No hay nada en la ayuda que coincida con tu búsqueda.')]));
+  };
+  q.oninput = draw;
+  draw();
+  main.append(
+    h('h1', { class: 'mode-title' }, h('span', { class: 'mode-ico' }, PG.svgEl('ayuda', 24, '#ffffff')), 'Ayuda'),
+    h('p', { class: 'muted', style: 'max-width:760px;margin:-12px 0 24px' }, 'Cómo funciona YTBox y todas sus opciones.'),
+    h('div', { class: 'help-layout' }, h('div', { class: 'help-side' }, q, toc), body));
+  if (view.section) setTimeout(() => $('#help-' + view.section)?.scrollIntoView({ block: 'start' }), 50);
 }
 
 // ---------- Calendario: los vídeos de todos los canales de todos los grupos ----------
@@ -574,6 +648,22 @@ function renderCalendar(main) {
   if (calData && Date.now() - calData.t < 15 * 60 * 1000) draw(); else start();
 }
 
+// Aviso: desde el gestor YouTube suele rechazar las consultas de Descubrir
+function discoverNotice() {
+  const extra = h('span', {});
+  try {
+    chrome.tabs.query({ url: 'https://www.youtube.com/*' }).then(t => {
+      extra.textContent = t.length ? ' Ahora mismo tienes YouTube abierto, así que el gestor lo usará para hacer las consultas: debería funcionar.' : ' Ahora mismo no tienes YouTube abierto en ninguna pestaña.';
+    }).catch(() => {});
+  } catch {}
+  return h('div', { class: 'card notice' },
+    h('span', { class: 'notice-ico' }, '⚠️'),
+    h('div', {},
+      h('p', { style: 'margin:0 0 6px' }, h('b', {}, 'Desde el gestor, Descubrir puede no mostrar resultados. '),
+        'YouTube suele rechazar estas consultas cuando no salen de su propia web (verás «YouTube respondió 403»). Para que funcione siempre, úsalo desde YouTube: sección YTBox de la barra lateral → Descubrir.', extra),
+      h('button', { class: 'primary', style: 'margin-top:8px', onclick: () => window.open('https://www.youtube.com/#ytbox-descubrir', '_blank') }, '✦ Abrir Descubrir en YouTube')));
+}
+
 // ---------- Descubrir ----------
 function renderDiscover(main) {
   const cfg = Object.assign({}, YTBoxDiscover.DEFAULTS, state.settings.discover || {});
@@ -592,11 +682,13 @@ function renderDiscover(main) {
   const q = h('input', { type: 'search', placeholder: 'Buscar canal…', style: 'width:100%;max-width:420px' });
   const clist = h('div', { class: 'tv-clist' });
   const allCh = Object.values(state.channels).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+  const sel = selectedChips(chansSel, () => { drawCh(); updateCount(); saveCfg(); });
   const drawCh = () => {
+    sel.draw();
     const t = q.value.toLowerCase();
     clist.replaceChildren(...allCh.filter(c => !t || c.name.toLowerCase().includes(t) || (c.handle || '').includes(t)).slice(0, 400).map(c => {
       const cb = h('input', { type: 'checkbox' }); cb.checked = chansSel.has(c.key);
-      cb.onchange = () => { cb.checked ? chansSel.add(c.key) : chansSel.delete(c.key); updateCount(); saveCfg(); };
+      cb.onchange = () => { cb.checked ? chansSel.add(c.key) : chansSel.delete(c.key); updateCount(); saveCfg(); sel.draw(); };
       return h('label', { class: 'tv-ch' }, cb, avatarEl(c), h('span', {}, c.name));
     }));
   };
@@ -650,9 +742,10 @@ function renderDiscover(main) {
 
   main.append(
     h('h1', { class: 'mode-title' }, modeIcon('brujula'), 'Descubrir'),
-    h('p', { class: 'muted', style: 'max-width:760px;margin:-12px 0 28px' }, 'Elige tus canales y te sugiero canales parecidos que aún no tienes en YTBox: los que más aparecen en los vídeos relacionados de los tuyos. También puedes abrirlo desde YouTube, en el lateral de YTBox.'),
+    h('p', { class: 'muted', style: 'max-width:760px;margin:-12px 0 20px' }, 'Elige tus canales y te sugiero canales parecidos que aún no tienes en YTBox: los que más aparecen en los vídeos relacionados de los tuyos.'),
+    discoverNotice(),
     h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '¿A partir de qué canales?'),
-      state.groups.length ? gchips : h('p', {}, 'Aún no tienes grupos.'), details, h('div', { style: 'margin-top:14px' }, count)),
+      state.groups.length ? gchips : h('p', {}, 'Aún no tienes grupos.'), sel.box, details, h('div', { style: 'margin-top:14px' }, count)),
     h('div', { class: 'card tv-actions' }, h('div', { class: 'row', style: 'justify-content:space-between' }, h('div', { class: 'row busy-row' }, ui.spin, status), go), ui.bar, results));
   updateCount();
 }
@@ -697,11 +790,13 @@ function renderTV(main) {
   const q = h('input', { type: 'search', placeholder: 'Buscar canal…', style: 'width:100%;max-width:420px' });
   const clist = h('div', { class: 'tv-clist' });
   const allCh = Object.values(state.channels).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+  const sel = selectedChips(chansSel, () => { drawCh(); updateCount(); saveCfg(); });
   const drawCh = () => {
+    sel.draw();
     const t = q.value.toLowerCase();
     clist.replaceChildren(...allCh.filter(c => !t || c.name.toLowerCase().includes(t) || (c.handle || '').includes(t)).slice(0, 400).map(c => {
       const cb = h('input', { type: 'checkbox' }); cb.checked = chansSel.has(c.key);
-      cb.onchange = () => { cb.checked ? chansSel.add(c.key) : chansSel.delete(c.key); updateCount(); saveCfg(); };
+      cb.onchange = () => { cb.checked ? chansSel.add(c.key) : chansSel.delete(c.key); updateCount(); saveCfg(); sel.draw(); };
       return h('label', { class: 'tv-ch' }, cb, avatarEl(c), h('span', {}, c.name));
     }));
   };
@@ -789,7 +884,7 @@ function renderTV(main) {
     h('p', { class: 'muted', style: 'max-width:760px;margin:-12px 0 28px' }, 'Crea una lista con vídeos al azar de los canales que elijas y la reproduce en YouTube, con la duración total que indiques. También puedes abrirlo desde YouTube, en el lateral de YTBox.'),
     h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Mis preconfiguraciones'), presetBox),
     h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '¿De qué canales?'),
-      state.groups.length ? gchips : h('p', {}, 'Aún no tienes grupos.'), details, h('div', { style: 'margin-top:14px' }, count)),
+      state.groups.length ? gchips : h('p', {}, 'Aún no tienes grupos.'), sel.box, details, h('div', { style: 'margin-top:14px' }, count)),
     h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '¿Qué vídeos?'),
       h('label', { class: 'row', style: 'gap:8px;margin-bottom:16px' }, onlyNew, 'Solo vídeos que no he visto'),
       h('div', { class: 'row' }, h('span', {}, 'Subidos en'), ageSel),

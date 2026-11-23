@@ -140,11 +140,16 @@ const YTAPI = (() => {
     const url = `https://www.youtube.com/youtubei/v1/${endpoint}?prettyPrint=false` + (c.key ? `&key=${c.key}` : '');
     const body = JSON.stringify(Object.assign({ context: { client: { clientName: 'WEB', clientVersion: c.version, hl: 'es', gl: c.gl } } }, payload));
     let lastErr = null;
-    for (const creds of anon ? ['omit'] : ['include', 'omit']) {
+    // 1) Con tu sesión (como hace la propia web), si la hay
+    if (!anon && (cookie('SAPISID') || cookie('__Secure-3PAPISID'))) { try { return await call(endpoint, payload); } catch (e) { lastErr = e; } }
+    // 2) Con cookies y 3) anónima. Si YouTube frena por exceso de peticiones (403/429), se espera y se reintenta
+    for (const [creds, wait] of anon ? [['omit', 0], ['omit', 2500]] : [['include', 0], ['omit', 0], ['omit', 2500]]) {
+      if (wait) await new Promise(r => setTimeout(r, wait));
       try {
         const res = await PG.fetch(url, { method: 'POST', credentials: creds, headers: { 'Content-Type': 'application/json', 'X-Youtube-Client-Name': '1', 'X-Youtube-Client-Version': c.version }, body });
         if (res.ok) return await res.json();
         lastErr = new Error('YouTube respondió ' + res.status);
+        if (res.status !== 403 && res.status !== 429 && res.status >= 400 && res.status < 500) break;
       } catch (e) { lastErr = e; }
     }
     throw lastErr || new Error('Sin respuesta de YouTube');
@@ -303,6 +308,19 @@ const YTAPI = (() => {
     return [];
   }
 
+  // Nombre real de un canal a partir de su RSS (petición pequeña). Sirve para canales guardados solo con su id.
+  async function channelName(channelId) {
+    const res = await PG.fetch('https://www.youtube.com/feeds/videos.xml?channel_id=' + channelId, { credentials: 'include' });
+    if (!res.ok) return null;
+    const xml = await res.text();
+    const unesc = x => x.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+    const m = xml.match(/<author>\s*<name>([\s\S]*?)<\/name>/) || xml.match(/<title>([\s\S]*?)<\/title>/);
+    const name = m ? unesc(m[1]).trim() : '';
+    return name && name !== channelId ? name : null;
+  }
+  // ¿Este canal tiene un código en vez de nombre?
+  const needsName = c => !!c && (!c.name || c.name === c.id || c.name === c.key || /^UC[\w-]{22}$/.test(c.name));
+
   // @usuario → id del canal (UC…). Respuesta pequeña (~1 KB). No necesita sesión.
   async function resolveHandle(handle) {
     const json = await publicCall('navigation/resolve_url', { url: 'https://www.youtube.com/' + handle });
@@ -330,5 +348,12 @@ const YTAPI = (() => {
 
   async function deletePlaylist(playlistId) { return call('playlist/delete', { playlistId }); }
 
-  return { channelVideos, rssVideos, resolveHandle, deletePlaylist, channelStats, parseSubs, heatmap, history, related, addMany, watchLater, addToPlaylist, removeFromPlaylist, getPlaylists, createPlaylist, loggedIn: () => !!(cookie('SAPISID') || cookie('__Secure-3PAPISID')) };
+  async function signedCall(url, body) {
+    const c = config();
+    const res = await PG.fetch(url, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'Authorization': await authHeader(), 'X-Origin': 'https://www.youtube.com', 'X-Goog-AuthUser': '0', 'X-Youtube-Client-Name': '1', 'X-Youtube-Client-Version': c.version }, body });
+    if (!res.ok) throw new Error('Error ' + res.status);
+    return res.json();
+  }
+
+  return { signedCall, channelName, needsName, channelVideos, rssVideos, resolveHandle, deletePlaylist, channelStats, parseSubs, heatmap, history, related, addMany, watchLater, addToPlaylist, removeFromPlaylist, getPlaylists, createPlaylist, loggedIn: () => !!(cookie('SAPISID') || cookie('__Secure-3PAPISID')) };
 })();
