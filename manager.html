@@ -8,15 +8,15 @@
 <body>
 <aside id="side">
   <div class="brand"><span class="brand-logo"></span> <span>YTBox</span></div>
-  <button id="newGroup" class="primary wide">+ Nuevo grupo</button>
+  <button id="newGroup" class="primary wide" data-i18n="+ Nuevo grupo">+ Nuevo grupo</button>
   <div id="groupList"></div>
   <nav class="side-nav">
-    <button data-view="tv"><span class="nav-ico" data-ico="tv"></span> Modo TV</button>
-    <button data-view="discover"><span class="nav-ico" data-ico="brujula"></span> Descubrir</button>
-    <button data-view="calendar"><span class="nav-ico" data-ico="calendario"></span> Calendario</button>
-    <button data-view="channels"><span class="nav-ico" data-ico="grupo" data-plain="1"></span> Todos los canales</button>
-    <button data-view="help"><span class="nav-ico" data-ico="ayuda" data-plain="1"></span> Ayuda</button>
-    <button data-view="settings"><span class="nav-ico" data-ico="engranaje" data-plain="1"></span> Ajustes</button>
+    <button data-view="tv" data-i18n="Modo TV"><span class="nav-ico" data-ico="tv"></span> Modo TV</button>
+    <button data-view="discover" data-i18n="Descubrir"><span class="nav-ico" data-ico="brujula"></span> Descubrir</button>
+    <button data-view="calendar" data-i18n="Calendario"><span class="nav-ico" data-ico="calendario"></span> Calendario</button>
+    <button data-view="channels" data-i18n="Todos los canales"><span class="nav-ico" data-ico="grupo" data-plain="1"></span> Todos los canales</button>
+    <button data-view="help" data-i18n="Ayuda"><span class="nav-ico" data-ico="ayuda" data-plain="1"></span> Ayuda</button>
+    <button data-view="settings" data-i18n="Ajustes"><span class="nav-ico" data-ico="engranaje" data-plain="1"></span> Ajustes</button>
   </nav>
 </aside>
 
@@ -28,29 +28,32 @@
     <div class="picker-head">
       <div id="pickPreview" class="pick-preview"></div>
       <div class="picker-tabs" id="pickTabs">
-        <button data-tab="emoji" class="on">😀 Emojis</button>
-        <button data-tab="svg">✏️ Iconos</button>
-        <button data-tab="text">Aa Texto</button>
-        <button data-tab="image">🖼 Imagen</button>
-        <button data-tab="avatar">👤 Avatares</button>
+        <button data-tab="emoji" class="on" data-i18n="😀 Emojis">😀 Emojis</button>
+        <button data-tab="svg" data-i18n="✏️ Iconos">✏️ Iconos</button>
+        <button data-tab="text" data-i18n="Aa Texto">Aa Texto</button>
+        <button data-tab="image" data-i18n="🖼 Imagen">🖼 Imagen</button>
+        <button data-tab="avatar" data-i18n="👤 Avatares">👤 Avatares</button>
       </div>
-      <button class="icon-btn" id="pickClose" title="Cerrar">✕</button>
+      <button class="icon-btn" id="pickClose" title="Cerrar" data-i18n-title="Cerrar">✕</button>
     </div>
     <div class="picker-opts">
-      <label>Color <input type="color" id="pickColor"></label>
+      <label><span data-i18n="Color">Color</span> <input type="color" id="pickColor"></label>
       <div id="swatches" class="swatches"></div>
-      <label class="chk"><input type="checkbox" id="pickBg"> Fondo de color</label>
-      <label class="chk"><input type="checkbox" id="pickRound"> Redondo</label>
+      <label class="chk"><input type="checkbox" id="pickBg"> <span data-i18n="Fondo de color">Fondo de color</span></label>
+      <label class="chk"><input type="checkbox" id="pickRound"> <span data-i18n="Redondo">Redondo</span></label>
     </div>
     <div id="recent" class="recent"></div>
     <div id="pickBody" class="picker-body"></div>
     <div class="picker-foot">
       <span id="pickCount" class="muted"></span>
-      <button id="pickOk" class="primary">Usar este icono</button>
+      <button id="pickOk" class="primary" data-i18n="Usar este icono">Usar este icono</button>
     </div>
   </div>
 </div>
 
+<script src="i18n.js"></script>
+<script src="i18n-en.js"></script>
+<script src="i18n-gl.js"></script>
 <script src="emoji-data.js"></script>
 <script src="svg-icons.js"></script>
 <script src="common.js"></script>

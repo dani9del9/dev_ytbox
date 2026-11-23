@@ -56,18 +56,18 @@ const YTBoxTV = (() => {
   async function run(cfg, state, onStatus = () => {}) {
     const chans = selectedChannels(cfg, state);
     const n = Math.max(0, Number(cfg.amount) || 0);
-    if (!chans.length) throw new Error('Elige al menos un grupo o canal.');
-    if (!n) throw new Error('Indica cuánto quieres que dure.');
+    if (!chans.length) throw new Error(T('Elige al menos un grupo o canal.'));
+    if (!n) throw new Error(T('Indica cuánto quieres que dure.'));
     const missing = chans.filter(c => !c.id);
     if (missing.length) {
-      onStatus(`Buscando ${missing.length} canales…`);
+      onStatus(T('Buscando {0} canales…', missing.length));
       await pool(missing, 4, c => PG.ensureChannelId(c));
       await PG.save({ channels: state.channels });
     }
     let done = 0; const all = [];
     const withId = chans.filter(c => c.id);
     await pool(withId, 4, async c => {
-      try { all.push(...await channelVideos(c.id)); } finally { done++; onStatus(`Buscando vídeos… ${done}/${withId.length} canales`); }
+      try { all.push(...await channelVideos(c.id)); } finally { done++; onStatus(T('Buscando vídeos… {0}/{1} canales', done, withId.length)); }
     });
     const { watched = {} } = await chrome.storage.local.get('watched');
     const maxAge = AGES[cfg.maxAge] || 0;
@@ -77,8 +77,8 @@ const YTBoxTV = (() => {
     if (cfg.style === 'picoteo') return runPicoteo(cfg, candidates, target, onStatus);
     const { picked, total } = build(candidates, target);
     if (!picked.length) {
-      throw new Error(candidates.length ? 'Los vídeos disponibles son más largos que el tiempo elegido. Prueba con más tiempo.'
-        : 'No hay vídeos con estas condiciones. Prueba con más canales o una fecha más amplia.');
+      throw new Error(candidates.length ? T('Los vídeos disponibles son más largos que el tiempo elegido. Prueba con más tiempo.')
+        : T('No hay vídeos con estas condiciones. Prueba con más canales o una fecha más amplia.'));
     }
     return { picked, total, target, candidates: candidates.length };
   }
@@ -101,15 +101,15 @@ const YTBoxTV = (() => {
     const pool2 = candidates.filter(v => v.seconds >= L * 1.6);
     const { picked } = build(pool2, target, () => L);
     if (!picked.length) {
-      throw new Error(candidates.length ? 'Los vídeos disponibles son demasiado cortos para el tamaño de fragmento elegido.'
-        : 'No hay vídeos con estas condiciones. Prueba con más canales o una fecha más amplia.');
+      throw new Error(candidates.length ? T('Los vídeos disponibles son demasiado cortos para el tamaño de fragmento elegido.')
+        : T('No hay vídeos con estas condiciones. Prueba con más canales o una fecha más amplia.'));
     }
     let done = 0;
     await pool(picked, 4, async v => {
       let markers = [];
       try { markers = await YTAPI.heatmap(v.vid); } catch (e) { console.warn('[YTBox TV] heatmap', e); }
       Object.assign(v, bestWindow(markers, v.seconds, L));
-      done++; onStatus(`Buscando lo más visto… ${done}/${picked.length} vídeos`);
+      done++; onStatus(T('Buscando lo más visto… {0}/{1} vídeos', done, picked.length));
     });
     const total = picked.reduce((a, v) => a + (v.end - v.start), 0);
     return { picked, total, target, candidates: pool2.length, picoteo: true };
@@ -151,7 +151,7 @@ const YTBoxTV = (() => {
     } else await chrome.storage.local.remove('tvSession');
     const ids = picked.slice(0, 50).map(v => v.vid);
     const name = presetNameFor(cfg, state) || PLAYLIST_NAME;
-    if (typeof YTAPI !== 'undefined' && YTAPI.loggedIn()) onStatus(`Creando la lista «${name}»…`);
+    if (typeof YTAPI !== 'undefined' && YTAPI.loggedIn()) onStatus(T('Creando la lista «{0}»…', name));
     return (await namedPlaylist(ids, name)) || playUrl(picked);
   }
 
@@ -172,8 +172,8 @@ const YTBoxTV = (() => {
     cfg = Object.assign({}, DEFAULTS, cfg);
     const names = (cfg.groups || []).map(id => (state.groups.find(g => g.id === id) || {}).name).filter(Boolean);
     const nc = (cfg.channels || []).filter(k => state.channels[k]).length;
-    if (nc) names.push(`${nc} canal${nc > 1 ? 'es' : ''}`);
-    return `${cfg.style === 'picoteo' ? '🍿 ' : ''}${cfg.amount} ${cfg.unit === 'h' ? 'h' : 'min'} · ${AGE_TXT[cfg.maxAge] || ''}${cfg.onlyUnwatched ? ' · sin ver' : ''}${Number(cfg.maxLen) ? ' · máx. ' + cfg.maxLen + ' min/vídeo' : ''} · ${names.join(', ') || 'sin canales'}`;
+    if (nc) names.push(TN(nc, '{0} canal', '{0} canales'));
+    return `${cfg.style === 'picoteo' ? '🍿 ' : ''}${cfg.amount} ${cfg.unit === 'h' ? 'h' : 'min'} · ${T(AGE_TXT[cfg.maxAge] || '')}${cfg.onlyUnwatched ? T(' · sin ver') : ''}${Number(cfg.maxLen) ? T(' · máx. {0} min/vídeo', cfg.maxLen) : ''} · ${names.join(', ') || T('sin canales')}`;
   }
 
   return { AGES, DEFAULTS, CLIPS, MAXLENS, presetNameFor, bestWindow, start, fmtDur, selectedChannels, build, run, playUrl, presets, savePreset, deletePreset, summary };

@@ -76,32 +76,41 @@
     try { updateLauncher(); } catch (e) { console.error('[YTBox] botón superior', e); }
   }
 
-  // Orden de los grupos en la barra lateral: vídeos sin ver (por defecto), nombre A-Z o Z-A
+  // Orden de los grupos en la barra lateral: último vídeo subido (por defecto), nombre A-Z o Z-A, vídeos sin ver
+  // (sidebarSortV = 2: el usuario eligió un orden con la versión nueva; si no, va por «último vídeo subido»)
+  const sidebarSortMode = () => (state.settings.sidebarSortV === 2 && state.settings.sidebarSort) || 'recent';
   function sortedGroups() {
-    const mode = state.settings.sidebarSort || 'unwatched';
+    const mode = sidebarSortMode();
     const list = state.groups.map((g, i) => ({ g, i }));
     const byName = (a, b) => a.g.name.localeCompare(b.g.name, 'es', { sensitivity: 'base', numeric: true });
     if (mode === 'az') list.sort(byName);
     else if (mode === 'za') list.sort((a, b) => byName(b, a));
-    else list.sort((a, b) => ((newCounts[b.g.id] || 0) - (newCounts[a.g.id] || 0)) || (a.i - b.i));
+    else if (mode === 'unwatched') list.sort((a, b) => ((newCounts[b.g.id] || 0) - (newCounts[a.g.id] || 0)) || (a.i - b.i));
+    else list.sort((a, b) => ((groupLatest[b.g.id] || 0) - (groupLatest[a.g.id] || 0)) || (a.i - b.i)); // el grupo con el vídeo más reciente primero
     // Los grupos fijados van siempre arriba (en el mismo orden entre ellos)
     return list.filter(x => x.g.pinned).concat(list.filter(x => !x.g.pinned)).map(x => x.g);
   }
 
   function groupRows(container, size, withMenu) {
+    // Opción «Mostrar solo los grupos con vídeos nuevos» (solo en el panel lateral)
+    const onlyNew = withMenu && state.settings.onlyNewGroups;
+    let shown = 0;
     for (const g of sortedGroups()) {
       const n = g.muted ? 0 : (newCounts[g.id] || 0);
-      const more = withMenu ? h('button', { class: 'pg-gmenu-btn', title: 'Opciones del grupo', 'aria-label': 'Opciones de ' + g.name,
+      if (onlyNew && !n) continue;
+      shown++;
+      const more = withMenu ? h('button', { class: 'pg-gmenu-btn', title: T('Opciones del grupo'), 'aria-label': T('Opciones de ') + g.name,
         onclick: e => { e.preventDefault(); e.stopPropagation(); openGroupItemMenu(e.currentTarget, g); } }, '⋮') : null;
       container.append(h('a', { class: 'pg-guide-item' + (g.muted ? ' pg-muted' : '') + (withMenu ? ' pg-has-menu' : ''), href: '#',
-        title: (g.pinned ? '📌 ' : '') + g.name + (g.muted ? ' · silenciado' : n ? ` · ${n} vídeo${n > 1 ? 's' : ''} nuevo${n > 1 ? 's' : ''}` : ''),
+        title: (g.pinned ? '📌 ' : '') + g.name + (g.muted ? T(' · silenciado') : n ? TN(n, ' · {0} vídeo nuevo', ' · {0} vídeos nuevos') : ''),
         onclick: e => { e.preventDefault(); $('#pg-launch-menu')?.remove(); openGroup(g.id); } },
         PG.iconEl(g, size), h('span', { class: 'pg-guide-name' + (n ? ' pg-has-new' : '') }, g.name),
-        g.pinned ? h('span', { class: 'pg-gflag', title: 'Fijado arriba' }, PG.svgEl('chincheta', 14, 'currentColor')) : null,
-        g.muted ? h('span', { class: 'pg-gflag', title: 'Silenciado: no muestra novedades' }, PG.svgEl('silencio', 14, 'currentColor')) : null,
+        g.pinned ? h('span', { class: 'pg-gflag', title: T('Fijado arriba') }, PG.svgEl('chincheta', 14, 'currentColor')) : null,
+        g.muted ? h('span', { class: 'pg-gflag', title: T('Silenciado: no muestra novedades') }, PG.svgEl('silencio', 14, 'currentColor')) : null,
         n ? h('span', { class: 'pg-guide-new' }, n > 99 ? '99+' : String(n)) : null,
         more));
     }
+    if (onlyNew && !shown && state.groups.length) container.append(h('div', { class: 'pg-guide-empty' }, T('No hay grupos con vídeos nuevos.')))
   }
 
   // Menú ⋮ de cada grupo en la barra lateral
@@ -112,7 +121,7 @@
     newCounts[g.id] = 0;
     await chrome.storage.local.set({ seen, marks });
     renderGuide(true); saveCountsCache(); quickRecount().catch(() => {});
-    toast(`«${g.name}» marcado como leído`);
+    toast(T('«{0}» marcado como leído', g.name));
   }
   function openGroupItemMenu(btn, g) {
     const old = $('#pg-menu');
@@ -128,11 +137,11 @@
     const item = (icon, label, fn) => h('button', { class: 'pg-vitem', onclick: fn }, h('span', { class: 'pg-vicon' }, PG.svgEl(icon, 18, 'currentColor')), h('span', {}, label));
     const menu = h('div', { id: 'pg-menu', 'data-kind': 'g-' + g.id },
       h('div', { class: 'pg-vlabel' }, g.name),
-      item('check', 'Marcar como leído', async () => { menu.remove(); await markGroupSeen(g); }),
-      item('chincheta', g.pinned ? 'Quitar de arriba' : 'Fijar arriba', () => setFlag('pinned', !g.pinned, g.pinned ? `«${g.name}» ya no está fijado` : `«${g.name}» fijado arriba`)),
-      item(g.muted ? 'campana' : 'silencio', g.muted ? 'Activar novedades' : 'Silenciar', () => setFlag('muted', !g.muted, g.muted ? `«${g.name}» vuelve a mostrar novedades` : `«${g.name}» silenciado: no mostrará novedades hasta que lo actives`)),
+      item('check', T('Marcar como leído'), async () => { menu.remove(); await markGroupSeen(g); }),
+      item('chincheta', g.pinned ? T('Quitar de arriba') : T('Fijar arriba'), () => setFlag('pinned', !g.pinned, g.pinned ? T('«{0}» ya no está fijado', g.name) : T('«{0}» fijado arriba', g.name))),
+      item(g.muted ? 'campana' : 'silencio', g.muted ? T('Activar novedades') : T('Silenciar'), () => setFlag('muted', !g.muted, g.muted ? T('«{0}» vuelve a mostrar novedades', g.name) : T('«{0}» silenciado: no mostrará novedades hasta que lo actives', g.name))),
       h('div', { class: 'pg-vsep' }),
-      item('lapiz', 'Editar', () => { menu.remove(); openManager('group=' + g.id); }));
+      item('lapiz', T('Editar'), () => { menu.remove(); openManager('group=' + g.id); }));
     document.body.append(menu);
     const r = btn.getBoundingClientRect();
     menu.style.top = Math.min(window.innerHeight - menu.offsetHeight - 8, r.bottom + 4) + 'px';
@@ -146,16 +155,16 @@
   function openGuideMenu(btn) {
     const old = $('#pg-menu');
     if (old) { old.remove(); if (old.dataset.kind === 'guide') return; }
-    const mode = state.settings.sidebarSort || 'unwatched';
-    const setSort = async v => { menu.remove(); state.settings.sidebarSort = v; await PG.save({ settings: state.settings }); };
+    const mode = sidebarSortMode();
+    const setSort = async v => { menu.remove(); state.settings.sidebarSort = v; state.settings.sidebarSortV = 2; await PG.save({ settings: state.settings }); };
     const opt = (v, label) => h('button', { class: 'pg-vitem' + (mode === v ? ' on' : ''), onclick: () => setSort(v) },
       h('span', { class: 'pg-vcheck' }, mode === v ? '✓' : ''), h('span', {}, label));
     const menu = h('div', { id: 'pg-menu', 'data-kind': 'guide' },
       h('button', { class: 'pg-vitem', onclick: async () => { menu.remove(); await markAllSeen(); } },
-        h('span', { class: 'pg-vicon' }, PG.svgEl('check', 18, 'currentColor')), h('span', {}, 'Marcar todo como visto')),
+        h('span', { class: 'pg-vicon' }, PG.svgEl('check', 18, 'currentColor')), h('span', {}, T('Marcar todo como visto'))),
       h('div', { class: 'pg-vsep' }),
-      h('div', { class: 'pg-vlabel' }, 'Ordenar por'),
-      opt('az', 'Nombre (A-Z)'), opt('za', 'Nombre (Z-A)'), opt('unwatched', 'Vídeos sin ver'));
+      h('div', { class: 'pg-vlabel' }, T('Ordenar por')),
+      opt('recent', T('Último vídeo subido')), opt('az', T('Nombre (A-Z)')), opt('za', T('Nombre (Z-A)')), opt('unwatched', T('Vídeos sin ver')));
     document.body.append(menu);
     const r = btn.getBoundingClientRect();
     menu.style.top = (r.bottom + 6) + 'px';
@@ -179,17 +188,18 @@
     await chrome.storage.local.set({ seen, marks });
     renderGuide(true);
     saveCountsCache();
-    toast('Todo marcado como visto');
+    toast(T('Todo marcado como visto'));
   }
 
   // ---------- Novedades por grupo (para la barra lateral) ----------
   const newCounts = {};
+  const groupLatest = {}; // groupId -> ms del último vídeo subido por sus canales
   let countingAt = 0;
   // Los últimos números se guardan para pintarlos al instante al cargar YouTube
-  const saveCountsCache = () => chrome.storage.local.set({ newCountsCache: { t: Date.now(), counts: Object.assign({}, newCounts), total: newTotal } }).catch(() => {});
+  const saveCountsCache = () => chrome.storage.local.set({ newCountsCache: { t: Date.now(), counts: Object.assign({}, newCounts), total: newTotal, latest: Object.assign({}, groupLatest) } }).catch(() => {});
   chrome.storage.local.get('newCountsCache').then(({ newCountsCache: c }) => {
     if (!c || Date.now() - c.t > 12 * 3600e3 || countingAt) return;
-    Object.assign(newCounts, c.counts || {}); newTotal = c.total || 0;
+    Object.assign(newCounts, c.counts || {}); newTotal = c.total || 0; Object.assign(groupLatest, c.latest || {});
     renderGuide(true);
   }).catch(() => {});
 
@@ -217,6 +227,10 @@
     const typeOk = v => type === 'all' || (type === 'shorts') === !!v.short;
     const allNew = new Set();
     for (const g of state.groups) {
+      // Fecha del vídeo más reciente del grupo (para ordenar la barra lateral)
+      let latest = 0;
+      for (const k of g.channels) { const c = state.channels[k]; for (const v of (c && feed[c.id]) || []) if (typeOk(v)) latest = Math.max(latest, v.published.getTime()); }
+      if (latest) groupLatest[g.id] = latest;
       const since = seen[g.id];
       if (!since || g.muted) { newCounts[g.id] = 0; continue; } // silenciado: sin novedades
       const m = marks[g.id] || {};
@@ -288,17 +302,17 @@
   // Acceso al modo Descubrir (barra lateral y desplegable superior)
   function discoverEntry(cls, px, inGuide, close) {
     const ico = h('span', { class: 'pg-tv-top-ico pg-disc-ico' }, PG.svgEl('brujula', px, '#ffffff'));
-    return h('a', { class: cls + ' pg-disc-entry', href: '#', title: 'Descubrir canales parecidos a los tuyos', onclick: e => { e.preventDefault(); close && close(); openDiscover(); } },
-      inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, 'Descubrir'), goArrow());
+    return h('a', { class: cls + ' pg-disc-entry', href: '#', title: T('Descubrir canales parecidos a los tuyos'), onclick: e => { e.preventDefault(); close && close(); openDiscover(); } },
+      inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, T('Descubrir')), goArrow());
   }
 
   // Acceso a «Nuevos vídeos» (todos los nuevos de todos los grupos)
   let newTotal = 0;
   function newVideosEntry(cls, px, inGuide, close) {
     const ico = h('span', { class: 'pg-tv-top-ico' }, PG.svgEl('nuevos', px, '#ffffff'));
-    return h('a', { class: cls + ' pg-new-entry', href: '#', title: newTotal ? `${newTotal} vídeos nuevos en tus grupos` : 'Todos los vídeos nuevos de tus grupos',
+    return h('a', { class: cls + ' pg-new-entry', href: '#', title: newTotal ? T('{0} vídeos nuevos en tus grupos', newTotal) : T('Todos los vídeos nuevos de tus grupos'),
       onclick: e => { e.preventDefault(); close && close(); openGroup(NEW_ID); } },
-      inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, 'Nuevos vídeos'),
+      inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, T('Nuevos vídeos')),
       newTotal ? h('span', { class: 'pg-guide-count' }, String(newTotal)) : goArrow());
   }
 
@@ -309,7 +323,7 @@
     const ico = h('span', { class: 'pg-tv-top-ico' }, PG.svgEl('tv', px, '#ffffff'));
     const list = h('div', { class: 'pg-tv-presets-box' }, ...tvPresetRows(close));
     let open = !!state.settings.tvPresetsOpen;
-    const caret = h('button', { class: 'pg-tv-caret', title: 'Mostrar u ocultar tus preconfiguraciones', 'aria-label': 'Preconfiguraciones del Modo TV' });
+    const caret = h('button', { class: 'pg-tv-caret', title: T('Mostrar u ocultar tus preconfiguraciones'), 'aria-label': T('Preconfiguraciones del Modo TV') });
     const paint = () => { list.style.display = open ? '' : 'none'; caret.textContent = `${open ? '▾' : '▸'} ${presets.length}`; caret.setAttribute('aria-expanded', String(open)); };
     caret.addEventListener('click', e => {
       e.preventDefault(); e.stopPropagation();
@@ -317,31 +331,31 @@
       state.settings.tvPresetsOpen = open; PG.save({ settings: state.settings });
     });
     paint();
-    const row = h('a', { class: cls, href: '#', title: 'Modo TV: lista aleatoria de tus canales', onclick: e => { e.preventDefault(); close && close(); openTV(); } },
-      inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, 'Modo TV'),
+    const row = h('a', { class: cls, href: '#', title: T('Modo TV: lista aleatoria de tus canales'), onclick: e => { e.preventDefault(); close && close(); openTV(); } },
+      inGuide ? h('span', { class: 'pg-guide-logo' }, ico) : ico, h('span', { class: 'pg-guide-name' }, T('Modo TV')),
       presets.length ? caret : goArrow());
     return presets.length ? [row, list] : [row];
   }
 
   function tvPresetRows(close) {
-    return YTBoxTV.presets(state).map(p => h('a', { class: 'pg-guide-item pg-tv-preset-row', href: '#', title: 'Preparar la lista: ' + YTBoxTV.summary(p.cfg, state),
+    return YTBoxTV.presets(state).map(p => h('a', { class: 'pg-guide-item pg-tv-preset-row', href: '#', title: T('Preparar la lista: ') + YTBoxTV.summary(p.cfg, state),
       onclick: e => { e.preventDefault(); close && close(); openTV(p.id, 'preview'); } },
       h('span', { class: 'pg-tv-preset-dot' }, '▶'), h('span', { class: 'pg-guide-name' }, p.name)));
   }
 
   function openTopMenu(btn) {
     const old = $('#pg-launch-menu'); if (old) { old.remove(); return; }
-    const m = h('div', { id: 'pg-launch-menu' }, h('div', { class: 'pg-menu-head' }, appLogo(20), h('div', { class: 'pg-menu-title' }, 'YTBox · Grupos')));
+    const m = h('div', { id: 'pg-launch-menu' }, h('div', { class: 'pg-menu-head' }, appLogo(20), h('div', { class: 'pg-menu-title' }, T('YTBox · Grupos'))));
     // Acceso directo al Modo TV, arriba del todo
     m.append(...tvBlock('pg-guide-item pg-tv-top', 18, false, () => m.remove()),
       discoverEntry('pg-guide-item pg-tv-top', 18, false, () => m.remove()),
       newVideosEntry('pg-guide-item pg-tv-top', 18, false, () => m.remove()),
       h('div', { class: 'pg-vsep' }));
-    if (!state.groups.length) m.append(h('div', { class: 'pg-menu-empty' }, 'Aún no tienes grupos.'));
+    if (!state.groups.length) m.append(h('div', { class: 'pg-menu-empty' }, T('Aún no tienes grupos.')));
     groupRows(m, 24);
     m.append(h('div', { class: 'pg-vsep' }),
-      h('a', { class: 'pg-guide-item', href: '#', onclick: e => { e.preventDefault(); m.remove(); markAllSeen(); } }, h('span', { class: 'pg-launch-ico' }, PG.svgEl('check', 18, 'currentColor')), h('span', { class: 'pg-guide-name' }, 'Marcar todo como visto')),
-      h('a', { class: 'pg-guide-item', href: '#', onclick: e => { e.preventDefault(); m.remove(); openManager(); } }, h('span', { class: 'pg-launch-ico' }, PG.svgEl('engranaje', 18, 'currentColor')), h('span', { class: 'pg-guide-name' }, 'Gestionar grupos')));
+      h('a', { class: 'pg-guide-item', href: '#', onclick: e => { e.preventDefault(); m.remove(); markAllSeen(); } }, h('span', { class: 'pg-launch-ico' }, PG.svgEl('check', 18, 'currentColor')), h('span', { class: 'pg-guide-name' }, T('Marcar todo como visto'))),
+      h('a', { class: 'pg-guide-item', href: '#', onclick: e => { e.preventDefault(); m.remove(); openManager('groups'); } }, h('span', { class: 'pg-launch-ico' }, PG.svgEl('engranaje', 18, 'currentColor')), h('span', { class: 'pg-guide-name' }, T('Gestionar grupos'))));
     document.body.append(m);
     const r = btn.getBoundingClientRect();
     m.style.top = (r.bottom + 8) + 'px';
@@ -357,7 +371,7 @@
     if (!end) { l && l.remove(); return; }
     if (!l || !end.contains(l)) {
       l && l.remove();
-      l = h('button', { id: 'pg-launcher', title: 'YTBox: tus grupos', 'aria-label': 'YTBox: tus grupos' }, appLogo(24), h('span', { class: 'pg-launch-badge' }));
+      l = h('button', { id: 'pg-launcher', title: T('YTBox: tus grupos'), 'aria-label': T('YTBox: tus grupos') }, appLogo(24), h('span', { class: 'pg-launch-badge' }));
       l.addEventListener('click', e => { e.stopPropagation(); openTopMenu(l); });
       end.insertBefore(l, end.firstChild);
     }
@@ -365,7 +379,7 @@
     const badge = l.querySelector('.pg-launch-badge');
     badge.textContent = total ? (total > 99 ? '99+' : String(total)) : '';
     badge.style.display = total ? '' : 'none';
-    l.title = total ? `YTBox: ${total} vídeo${total > 1 ? 's' : ''} nuevo${total > 1 ? 's' : ''}` : 'YTBox: tus grupos';
+    l.title = total ? TN(total, 'YTBox: {0} vídeo nuevo', 'YTBox: {0} vídeos nuevos') : T('YTBox: tus grupos');
   }
 
   function renderGuideInner(force) {
@@ -380,15 +394,15 @@
     }
     box.replaceChildren();
     const open = state.settings.sidebarOpen !== false;
-    const moreBtn = h('button', { class: 'pg-guide-btn', title: 'Más opciones', 'aria-label': 'Más opciones', onclick: e => { e.stopPropagation(); openGuideMenu(moreBtn); } }, '⋮');
+    const moreBtn = h('button', { class: 'pg-guide-btn', title: T('Más opciones'), 'aria-label': T('Más opciones'), onclick: e => { e.stopPropagation(); openGuideMenu(moreBtn); } }, '⋮');
     box.append(h('div', { class: 'pg-guide-head' },
       h('span', { class: 'pg-guide-logo' }, appLogo(20)),
-      h('button', { class: 'pg-guide-title', title: open ? 'Ocultar grupos' : 'Mostrar grupos', onclick: async () => {
+      h('button', { class: 'pg-guide-title', title: open ? T('Ocultar grupos') : T('Mostrar grupos'), onclick: async () => {
         state.settings.sidebarOpen = !open; await PG.save({ settings: state.settings });
       } }, h('span', {}, 'YTBox'), h('span', { class: 'pg-guide-caret' }, open ? '▾' : '▸')),
       h('span', { class: 'pg-guide-actions' },
-        h('button', { class: 'pg-guide-btn', title: 'Nuevo grupo', 'aria-label': 'Nuevo grupo', onclick: () => openManager('new') }, '+'),
-        h('button', { class: 'pg-guide-btn', title: 'Ajustes de YTBox', 'aria-label': 'Ajustes de YTBox', onclick: () => openManager('settings') }, '⚙'),
+        h('button', { class: 'pg-guide-btn', title: T('Nuevo grupo'), 'aria-label': T('Nuevo grupo'), onclick: () => openManager('new') }, '+'),
+        h('button', { class: 'pg-guide-btn', title: T('Ajustes de YTBox'), 'aria-label': T('Ajustes de YTBox'), onclick: () => openManager('settings') }, '⚙'),
         moreBtn),
     ));
     if (!open) return;
@@ -398,7 +412,7 @@
       newVideosEntry('pg-guide-item pg-tv-entry', 16, true),
       h('div', { class: 'pg-guide-sep' }));
     if (!state.groups.length) {
-      box.append(h('div', { class: 'pg-guide-empty' }, 'Aún no tienes grupos. ', h('a', { href: '#', onclick: e => { e.preventDefault(); openManager('new'); } }, 'Crear uno')));
+      box.append(h('div', { class: 'pg-guide-empty' }, T('Aún no tienes grupos. '), h('a', { href: '#', onclick: e => { e.preventDefault(); openManager('new'); } }, T('Crear uno'))));
     }
     groupRows(box, 24, true);
   }
@@ -490,7 +504,7 @@
       if (btn.dataset.sig !== sig) {
         btn.dataset.sig = sig;
         btn.classList.toggle('on', inGroups.length > 0);
-        btn.title = inGroups.length ? 'En YTBox: ' + inGroups.map(g => g.name).join(', ') : 'Añadir este canal a un grupo de YTBox';
+        btn.title = inGroups.length ? T('En YTBox: ') + inGroups.map(g => g.name).join(', ') : T('Añadir este canal a un grupo de YTBox');
         btn.setAttribute('aria-label', btn.title);
         btn.replaceChildren(...(inGroups.length
           ? [h('span', { class: 'pg-chbtn-icons' }, inGroups.slice(0, 3).map(g => PG.iconEl(g, 20))), inGroups.length > 3 ? h('span', { class: 'pg-chbtn-more' }, '+' + (inGroups.length - 3)) : null]
@@ -502,7 +516,7 @@
     if (!fab) { fab = h('div', { id: 'pg-fab' }); document.body.append(fab); }
     fab.replaceChildren(h('button', { class: 'pg-fab-btn', onclick: () => toggleMenu(ref) },
       inGroups.length ? h('span', { class: 'pg-fab-icons' }, inGroups.slice(0, 3).map(g => PG.iconEl(g, 18))) : appLogo(18),
-      inGroups.length ? ` En ${inGroups.length} grupo${inGroups.length > 1 ? 's' : ''}` : ' Añadir a grupo'));
+      inGroups.length ? TN(inGroups.length, ' En {0} grupo', ' En {0} grupos') : T(' Añadir a grupo')));
     fab.dataset.key = ref.key;
   }
 
@@ -533,7 +547,7 @@
     const aliasKeys = () => new Set(channelAliases(ref.key).map(c => c.key));
     const inNow = new Set(groupsOfChannel(ref.key).map(g => g.id));
     menu.append(h('div', { class: 'pg-menu-title' }, ref.name || ref.key));
-    if (!state.groups.length) menu.append(h('div', { class: 'pg-menu-empty' }, 'No hay grupos todavía.'));
+    if (!state.groups.length) menu.append(h('div', { class: 'pg-menu-empty' }, T('No hay grupos todavía.')));
     for (const g of state.groups) {
       const cb = h('input', { type: 'checkbox' }); cb.checked = inNow.has(g.id);
       menu.append(h('label', { class: 'pg-menu-item' }, cb, PG.iconEl(g, 20), h('span', {}, g.name)));
@@ -550,7 +564,7 @@
         cb.disabled = false;
       });
     }
-    const input = h('input', { type: 'text', placeholder: 'Nuevo grupo…', class: 'pg-menu-new' });
+    const input = h('input', { type: 'text', placeholder: T('Nuevo grupo…'), class: 'pg-menu-new' });
     input.addEventListener('keydown', async e => {
       if (e.key !== 'Enter' || !input.value.trim()) return;
       e.stopPropagation();
@@ -613,14 +627,14 @@
     let last = -1, same = 0;
     while (same < 4) {
       const n = $$('ytd-channel-renderer').length;
-      btn.textContent = `Cargando suscripciones… (${n})`;
+      btn.textContent = T('Cargando suscripciones… ({0})', n);
       if (n === last) same++; else { same = 0; last = n; }
       window.scrollTo(0, document.documentElement.scrollHeight);
       await new Promise(r => setTimeout(r, 900));
     }
     const added = await importChannels(collectVisibleChannels());
     window.scrollTo(0, 0);
-    btn.textContent = `✔ ${last} canales leídos, ${added} nuevos. Ve al gestor para organizarlos`;
+    btn.textContent = T('✔ {0} canales leídos, {1} nuevos. Ve al gestor para organizarlos', last, added);
     btn.disabled = false;
     btn.onclick = () => openManager('channels');
   }
@@ -628,9 +642,9 @@
   function decorateChannelList(force) {
     if (location.pathname !== '/feed/channels') { $('#pg-import-bar')?.remove(); return; }
     if (!$('#pg-import-bar')) {
-      const btn = h('button', { class: 'pg-import-btn' }, '📥 Importar todas mis suscripciones a YTBox');
+      const btn = h('button', { class: 'pg-import-btn' }, T('📥 Importar todas mis suscripciones a YTBox'));
       btn.onclick = () => importAll(btn);
-      const bar = h('div', { id: 'pg-import-bar' }, btn, h('button', { class: 'pg-import-btn pg-secondary', onclick: () => openManager('channels') }, 'Abrir gestor'));
+      const bar = h('div', { id: 'pg-import-bar' }, btn, h('button', { class: 'pg-import-btn pg-secondary', onclick: () => openManager('channels') }, T('Abrir gestor')));
       document.body.append(bar);
     }
     for (const r of $$('ytd-channel-renderer')) {
@@ -639,7 +653,7 @@
       const key = a && PG.keyFromHref(a.href);
       if (!key) continue;
       if (!b) {
-        b = h('button', { class: 'pg-ch-btn', title: 'Añadir a grupo' });
+        b = h('button', { class: 'pg-ch-btn', title: T('Añadir a grupo') });
         b.addEventListener('click', e => {
           e.preventDefault(); e.stopPropagation();
           const name = ($('#channel-title #text, ytd-channel-name #text', r) || {}).textContent;
@@ -731,7 +745,7 @@
   const NEW_ID = '__new';
   const newPageGroup = () => {
     const keys = new Set(); state.groups.filter(gr => !gr.muted).forEach(gr => gr.channels.forEach(k => keys.add(k)));
-    return { id: NEW_ID, name: 'Nuevos vídeos', icon: { type: 'svg', value: 'nuevos', bg: true }, color: state.settings.color1 || '#ff6347', channels: [...keys] };
+    return { id: NEW_ID, name: T('Nuevos vídeos'), icon: { type: 'svg', value: 'nuevos', bg: true }, color: state.settings.color1 || '#ff6347', channels: [...keys] };
   };
   async function openGroup(groupId, since) {
     const virt = groupId === NEW_ID;
@@ -754,9 +768,9 @@
     let selected = []; // ids en el orden en que se marcan
     overlay = h('div', { id: 'pg-overlay', class: virt ? 'pg-virt' : '' });
     document.documentElement.classList.add('pg-noscroll');
-    const status = h('span', { class: 'pg-status' }, 'Cargando…');
-    const newCount = h('button', { class: 'pg-newcount', style: 'display:none;border:0;cursor:pointer', title: 'Mostrar solo los nuevos' });
-    const search = h('input', { type: 'search', class: 'pg-search', placeholder: 'Buscar en el grupo' });
+    const status = h('span', { class: 'pg-status' }, T('Cargando…'));
+    const newCount = h('button', { class: 'pg-newcount', style: 'display:none;border:0;cursor:pointer', title: T('Mostrar solo los nuevos') });
+    const search = h('input', { type: 'search', class: 'pg-search', placeholder: T('Buscar en el grupo') });
     ['keydown', 'keyup', 'keypress'].forEach(t => search.addEventListener(t, e => e.stopPropagation()));
     // ---- Barra de herramientas: ordenar, periodo, tipo, vistos y diseño
     const saveSetting = async (k, v) => { state.settings[k] = v; await PG.save({ settings: state.settings }); };
@@ -770,26 +784,26 @@
         h('button', { class: get() === v ? 'on' : '', title: icon ? label : null, onclick: () => { onpick(v); draw(); } }, icon ? PG.svgEl(icon, 18, 'currentColor') : label)));
       draw(); return box;
     };
-    const sortSel = select([['new', '↓ Más recientes'], ['old', '↑ Más antiguos'], ['views', '🔥 Más vistos'], ['channel', 'Canal (A-Z)']], filters.sort,
-      v => { filters.sort = v; render(); saveSetting('sortBy', v); }, 'Ordenar por');
-    const periodSel = select([['all', 'Cualquier fecha'], ['day', 'Últimas 24 horas'], ['week', 'Última semana'], ['month', 'Último mes']], filters.period,
-      v => { filters.period = v; render(); renderChips(); saveSetting('period', v); }, 'Fecha de subida');
-    const typeSeg = segmented([['all', 'Todo'], ['videos', 'Vídeos'], ['shorts', 'Shorts']], () => filters.type,
+    const sortSel = select([['new', T('↓ Más recientes')], ['old', T('↑ Más antiguos')], ['views', T('🔥 Más vistos')], ['channel', T('Canal (A-Z)')]], filters.sort,
+      v => { filters.sort = v; render(); saveSetting('sortBy', v); }, T('Ordenar por'));
+    const periodSel = select([['all', T('Cualquier fecha')], ['day', T('Últimas 24 horas')], ['week', T('Última semana')], ['month', T('Último mes')]], filters.period,
+      v => { filters.period = v; render(); renderChips(); saveSetting('period', v); }, T('Fecha de subida'));
+    const typeSeg = segmented([['all', T('Todo')], ['videos', T('Vídeos')], ['shorts', T('Shorts')]], () => filters.type,
       v => { filters.type = v; render(); renderChips(); saveSetting('typeFilter', v).then(() => quickRecount()); });
-    const watchSeg = segmented([['all', 'Todos'], ['unwatched', 'No vistos']], () => filters.watch,
+    const watchSeg = segmented([['all', T('Todos')], ['unwatched', T('No vistos')]], () => filters.watch,
       v => { filters.watch = v; render(); renderChips(); saveSetting('watchFilter', v); });
     const applyView = () => {
       const vm = state.settings.viewMode || 'grid';
       overlay.classList.toggle('pg-list', vm === 'list');
       overlay.classList.toggle('pg-compact', vm === 'compact');
     };
-    const viewSeg = segmented([['grid', 'Cuadrícula', 'cuadricula'], ['compact', 'Cuadrícula compacta', 'capas'], ['list', 'Lista', 'lista']], () => state.settings.viewMode || 'grid',
+    const viewSeg = segmented([['grid', T('Cuadrícula'), 'cuadricula'], ['compact', T('Cuadrícula compacta'), 'capas'], ['list', T('Lista'), 'lista']], () => state.settings.viewMode || 'grid',
       v => { state.settings.viewMode = v; applyView(); saveSetting('viewMode', v); });
     const toolbar = h('div', { class: 'pg-toolbar' }, sortSel, periodSel, typeSeg, watchSeg, h('div', { class: 'pg-ov-spacer' }), viewSeg);
     // ---- Calendario de subidas
     let calOpen = !!state.settings.calOpen, calMonth = null, calTouched = false;
     const cal = h('div', { class: 'pg-cal', style: 'display:none' });
-    const calBtn = h('button', { class: 'pg-btn pg-cal-btn' + (calOpen ? ' on' : ''), title: 'Calendario: qué días se subió cada vídeo', 'aria-label': 'Calendario de subidas', 'aria-pressed': String(calOpen) }, PG.svgEl('calendario', 18, 'currentColor'));
+    const calBtn = h('button', { class: 'pg-btn pg-cal-btn' + (calOpen ? ' on' : ''), title: T('Calendario: qué días se subió cada vídeo'), 'aria-label': T('Calendario de subidas'), 'aria-pressed': String(calOpen) }, PG.svgEl('calendario', 18, 'currentColor'));
     calBtn.onclick = () => {
       calOpen = !calOpen; calBtn.classList.toggle('on', calOpen); calBtn.setAttribute('aria-pressed', String(calOpen));
       if (!calOpen && filters.day) { filters.day = null; render(); }
@@ -800,25 +814,25 @@
       h('div', { class: 'pg-ov-spacer' }),
       search,
       calBtn,
-      h('button', { class: 'pg-btn', title: 'Recargar', onclick: () => { g.channels.forEach(k => { const c = state.channels[k]; c && c.id && rssCache.delete(c.id); }); openGroup(groupId, since); } }, '⟳'),
-      virt ? h('button', { class: 'pg-markall', title: 'Quita la etiqueta «Nuevo» de todos los vídeos en todos tus grupos', onclick: async () => { await markAllSeen(); openGroup(NEW_ID); } }, '✓ Marcar todos como vistos en los grupos')
-        : h('button', { class: 'pg-btn', title: 'Editar grupo', onclick: () => openManager('group=' + g.id) }, '✎'),
-      h('button', { class: 'pg-btn', title: 'Cerrar (Esc)', onclick: closeOverlay }, '✕'));
+      h('button', { class: 'pg-btn', title: T('Recargar'), onclick: () => { g.channels.forEach(k => { const c = state.channels[k]; c && c.id && rssCache.delete(c.id); }); openGroup(groupId, since); } }, '⟳'),
+      virt ? h('button', { class: 'pg-markall', title: T('Quita la etiqueta «Nuevo» de todos los vídeos en todos tus grupos'), onclick: async () => { await markAllSeen(); openGroup(NEW_ID); } }, T('✓ Marcar todos como vistos en los grupos'))
+        : h('button', { class: 'pg-btn', title: T('Editar grupo'), onclick: () => openManager('group=' + g.id) }, '✎'),
+      h('button', { class: 'pg-btn', title: T('Cerrar (Esc)'), onclick: closeOverlay }, '✕'));
     const chips = h('div', { class: 'pg-chips' });
     // Barra de reproducción: modo + botón para lanzar la cola
-    const modeSel = h('select', { class: 'pg-mode', title: 'Qué vídeos' },
-      ...[['todos', 'Todos'], ['nuevos', 'Nuevos'], ['aleatorio', 'Aleatorio'], ['seleccionar', 'Seleccionar']].map(([v, t]) => h('option', { value: v }, t)));
+    const modeSel = h('select', { class: 'pg-mode', title: T('Qué vídeos') },
+      ...[['todos', T('Todos')], ['nuevos', T('Nuevos')], ['aleatorio', T('Aleatorio')], ['seleccionar', T('Seleccionar')]].map(([v, t]) => h('option', { value: v }, t)));
     modeSel.value = mode;
     // Qué hacer con esos vídeos
     let action = ['cola', 'wl', 'playlist'].includes(state.settings.groupAction) ? state.settings.groupAction : 'cola';
-    const actionSel = h('select', { class: 'pg-mode', title: 'Qué hacer con los vídeos' },
-      ...[['cola', 'Añadir a la cola'], ['wl', 'Añadir a Ver más tarde'], ['playlist', 'Añadir a una playlist']].map(([v, t]) => h('option', { value: v }, t)));
+    const actionSel = h('select', { class: 'pg-mode', title: T('Qué hacer con los vídeos') },
+      ...[['cola', T('Añadir a la cola')], ['wl', T('Añadir a Ver más tarde')], ['playlist', T('Añadir a una playlist')]].map(([v, t]) => h('option', { value: v }, t)));
     actionSel.value = action;
-    const playBtn = h('button', { class: 'pg-play' }, 'Aplicar');
-    const clearSel = h('button', { class: 'pg-clear', title: 'Quitar selección', style: 'display:none' }, 'Limpiar');
+    const playBtn = h('button', { class: 'pg-play' }, T('Aplicar'));
+    const clearSel = h('button', { class: 'pg-clear', title: T('Quitar selección'), style: 'display:none' }, T('Limpiar'));
     // Cola de YTBox (vídeos añadidos uno a uno con el menú ⋮)
-    const queueBtn = h('button', { class: 'pg-queue', title: 'Reproducir tu cola de YTBox' });
-    const queueClear = h('button', { class: 'pg-queue-x', title: 'Vaciar la cola' }, '✕');
+    const queueBtn = h('button', { class: 'pg-queue', title: T('Reproducir tu cola de YTBox') });
+    const queueClear = h('button', { class: 'pg-queue-x', title: T('Vaciar la cola') }, '✕');
     const queueBox = h('div', { class: 'pg-queue-box', style: 'display:none' }, queueBtn, queueClear);
     playBtn.style.display = 'none'; modeSel.style.display = 'none'; actionSel.style.display = 'none'; // se muestran cuando hay vídeos
     const actions = h('div', { class: 'pg-actions' }, modeSel, clearSel, actionSel, playBtn);
@@ -835,15 +849,15 @@
       actions.remove(); toolbar.remove(); search.remove(); chips.remove();
       grid.append(h('div', { class: 'pg-empty' },
         h('div', { style: 'font-size:40px;margin-bottom:10px' }, '📭'),
-        h('div', { style: 'margin-bottom:16px' }, 'Este grupo todavía no tiene canales. Entra en un canal y pulsa «📁 Añadir a grupo», o añádelos desde el gestor.'),
-        h('button', { class: 'pg-play', onclick: () => openManager('group=' + g.id) }, '+ Añadir canales')));
+        h('div', { style: 'margin-bottom:16px' }, T('Este grupo todavía no tiene canales. Entra en un canal y pulsa «📁 Añadir a grupo», o añádelos desde el gestor.')),
+        h('button', { class: 'pg-play', onclick: () => openManager('group=' + g.id) }, T('+ Añadir canales'))));
       return;
     }
     // Resolver ids que falten
     let changed = false;
     const missing = chans.filter(c => !c.id);
     if (missing.length) {
-      status.textContent = `Resolviendo ${missing.length} canales…`;
+      status.textContent = T('Resolviendo {0} canales…', missing.length);
       await pool(missing, 4, async c => { await PG.ensureChannelId(c); changed = true; });
       if (changed) await PG.save({ channels: state.channels });
       if (overlayGroupId !== groupId) return;
@@ -869,7 +883,7 @@
     const saveMarks = () => chrome.storage.local.set({ marks: marksAll });
     const updateQueue = () => {
       queueBox.style.display = queue.length ? '' : 'none';
-      queueBtn.textContent = `▶ Mi cola · ${queue.length}`;
+      queueBtn.textContent = T('▶ Mi cola · {0}', queue.length);
     };
     const saveQueue = async () => { updateQueue(); await chrome.storage.local.set({ queue }); };
     queueBtn.onclick = async () => {
@@ -879,13 +893,13 @@
       closeOverlay();
       location.href = '/watch_videos?video_ids=' + ids.join(',');
     };
-    queueClear.onclick = async () => { queue = []; await saveQueue(); toast('Cola vaciada'); };
+    queueClear.onclick = async () => { queue = []; await saveQueue(); toast(T('Cola vaciada')); };
     updateQueue();
     const menuCtx = {
       inQueue: vid => queue.some(q => q.vid === vid),
       toggleQueue: async v => {
-        if (menuCtx.inQueue(v.vid)) { queue = queue.filter(q => q.vid !== v.vid); toast('Quitado de tu cola'); }
-        else { queue.push({ vid: v.vid, title: v.title }); toast(`Añadido a tu cola (${queue.length})`); }
+        if (menuCtx.inQueue(v.vid)) { queue = queue.filter(q => q.vid !== v.vid); toast(T('Quitado de tu cola')); }
+        else { queue.push({ vid: v.vid, title: v.title }); toast(T('Añadido a tu cola ({0})', queue.length)); }
         await saveQueue();
       },
       isNew,
@@ -919,7 +933,6 @@
       const q = filters.q.toLowerCase();
       return passBase(v) && (!filters.channel || v.channelId === filters.channel) && (!filters.onlyNew || isNew(v)) && (!q || v.title.toLowerCase().includes(q) || v.author.toLowerCase().includes(q));
     };
-    const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
     const drawCal = () => {
       cal.style.display = calOpen ? '' : 'none';
       if (!calOpen) return;
@@ -946,7 +959,7 @@
         const authors = [...new Set(list.map(v => v.channelId))].map(id => byId.get(id)).filter(Boolean);
         const cell = h('button', { class: 'pg-cal-cell pg-cal-day' + (list.length ? ' has' : '') + (k === today ? ' today' : '') + (filters.day === k ? ' sel' : ''),
           ...(list.length ? {} : { disabled: '' }), style: `--i:${(list.length / max).toFixed(2)}`,
-          title: list.length ? `${d} de ${MESES[m]}: ${list.length} vídeo${list.length > 1 ? 's' : ''}\n` + list.slice(0, 8).map(v => '· ' + v.author + ' — ' + v.title).join('\n') + (list.length > 8 ? `\n… y ${list.length - 8} más` : '') : `${d} de ${MESES[m]}: sin vídeos`,
+          title: list.length ? TN(list.length, '{1}: {0} vídeo', '{1}: {0} vídeos', T.dayMonth(d, m)) + '\n' + list.slice(0, 8).map(v => '· ' + v.author + ' — ' + v.title).join('\n') + (list.length > 8 ? T('\n… y {0} más', list.length - 8) : '') : T('{0}: sin vídeos', T.dayMonth(d, m)),
           onclick: () => { filters.day = filters.day === k ? null : k; render(); } },
           h('span', { class: 'pg-cal-num' }, String(d)),
           list.length ? h('span', { class: 'pg-cal-count' }, String(list.length)) : null,
@@ -955,15 +968,15 @@
       }
       cal.replaceChildren(
         h('div', { class: 'pg-cal-head' },
-          h('button', { class: 'pg-btn pg-cal-nav', title: 'Mes anterior', 'aria-label': 'Mes anterior', onclick: () => nav(-1) }, '‹'),
-          h('b', {}, `${MESES[m]} ${y}`),
-          h('button', { class: 'pg-btn pg-cal-nav', title: 'Mes siguiente', 'aria-label': 'Mes siguiente', onclick: () => nav(1) }, '›'),
-          h('button', { class: 'pg-cal-today', onclick: () => { calTouched = true; const t = new Date(); calMonth = new Date(t.getFullYear(), t.getMonth(), 1); drawCal(); } }, 'Hoy'),
-          h('span', { class: 'pg-cal-sum' }, monthTotal ? `${monthTotal} vídeo${monthTotal > 1 ? 's' : ''} este mes` : 'Ningún vídeo este mes'),
-          filters.day ? h('button', { class: 'pg-cal-clear', title: 'Quitar el filtro de día', onclick: () => { filters.day = null; render(); } },
-            `📅 ${Number(filters.day.slice(8))} ${MESES[Number(filters.day.slice(5, 7)) - 1].slice(0, 3)} ✕`) : null),
-        h('div', { class: 'pg-cal-grid' }, ...['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(t => h('span', { class: 'pg-cal-wd' }, t)), ...cells),
-        h('div', { class: 'pg-cal-note' }, 'Pulsa un día para ver solo sus vídeos. Se cuentan los últimos 15 vídeos de cada canal (lo que da YouTube), así que los meses antiguos salen más vacíos.'));
+          h('button', { class: 'pg-btn pg-cal-nav', title: T('Mes anterior'), 'aria-label': T('Mes anterior'), onclick: () => nav(-1) }, '‹'),
+          h('b', {}, `${T.month(m)} ${y}`),
+          h('button', { class: 'pg-btn pg-cal-nav', title: T('Mes siguiente'), 'aria-label': T('Mes siguiente'), onclick: () => nav(1) }, '›'),
+          h('button', { class: 'pg-cal-today', onclick: () => { calTouched = true; const t = new Date(); calMonth = new Date(t.getFullYear(), t.getMonth(), 1); drawCal(); } }, T('Hoy')),
+          h('span', { class: 'pg-cal-sum' }, monthTotal ? TN(monthTotal, '{0} vídeo este mes', '{0} vídeos este mes') : T('Ningún vídeo este mes')),
+          filters.day ? h('button', { class: 'pg-cal-clear', title: T('Quitar el filtro de día'), onclick: () => { filters.day = null; render(); } },
+            `📅 ${Number(filters.day.slice(8))} ${T.month(Number(filters.day.slice(5, 7)) - 1).slice(0, 3)} ✕`) : null),
+        h('div', { class: 'pg-cal-grid' }, ...T.weekdays().map(t => h('span', { class: 'pg-cal-wd' }, t)), ...cells),
+        h('div', { class: 'pg-cal-note' }, T('Pulsa un día para ver solo sus vídeos. Se cuentan los últimos 15 vídeos de cada canal (lo que da YouTube), así que los meses antiguos salen más vacíos.')));
     };
     const visible = () => {
       const q = filters.q.toLowerCase();
@@ -994,13 +1007,13 @@
       // El número de vídeos va en el propio selector: «Todos (15)», «Nuevos (3)»…
       const vids = visible();
       const counts = { todos: vids.length, nuevos: vids.filter(isNew).length, aleatorio: vids.length, seleccionar: selected.length };
-      [...modeSel.options].forEach(o => { o.textContent = `${{ todos: 'Todos', nuevos: 'Nuevos', aleatorio: 'Aleatorio', seleccionar: 'Seleccionar' }[o.value]} (${counts[o.value]})`; });
+      [...modeSel.options].forEach(o => { o.textContent = `${{ todos: T('Todos'), nuevos: T('Nuevos'), aleatorio: T('Aleatorio'), seleccionar: T('Seleccionar') }[o.value]} (${counts[o.value]})`; });
       const max = action === 'cola' ? 50 : 200;
-      const word = n === 1 ? 'vídeo' : 'vídeos';
-      playBtn.title = !n ? 'No hay vídeos' : {
-        cola: `Crea una lista con ${Math.min(n, max)} ${word} y empieza a verla` + (n > max ? ' (YouTube admite 50 por cola)' : ''),
-        wl: `Guarda ${Math.min(n, max)} ${word} en «Ver más tarde»`,
-        playlist: `Elige una playlist y guarda en ella ${Math.min(n, max)} ${word}`,
+      const word = n === 1 ? T('vídeo') : T('vídeos');
+      playBtn.title = !n ? T('No hay vídeos') : {
+        cola: T('Crea una lista con {0} {1} y empieza a verla', Math.min(n, max), word) + (n > max ? T(' (YouTube admite 50 por cola)') : ''),
+        wl: T('Guarda {0} {1} en «Ver más tarde»', Math.min(n, max), word),
+        playlist: T('Elige una playlist y guarda en ella {0} {1}', Math.min(n, max), word),
       }[action];
     };
     const toggleSelect = (vid, el) => {
@@ -1023,7 +1036,7 @@
       action = actionSel.value; updatePlay();
       state.settings.groupAction = action; await PG.save({ settings: state.settings });
     };
-    const busy = (on, txt) => { playBtn.dataset.busy = on ? '1' : ''; playBtn.textContent = txt || 'Aplicar'; playBtn.disabled = on; };
+    const busy = (on, txt) => { playBtn.dataset.busy = on ? '1' : ''; playBtn.textContent = txt || T('Aplicar'); playBtn.disabled = on; };
     playBtn.onclick = async () => {
       if (action === 'cola') {
         const ids = queueIds().slice(0, 50);
@@ -1034,12 +1047,12 @@
       }
       const ids = queueIds().slice(0, 200);
       if (!ids.length) return;
-      if (!YTAPI.loggedIn()) { toast('Inicia sesión en YouTube para guardar vídeos en tus listas', true); return; }
+      if (!YTAPI.loggedIn()) { toast(T('Inicia sesión en YouTube para guardar vídeos en tus listas'), true); return; }
       if (action === 'playlist') { showBulkPlaylists(playBtn, ids, busy); return; }
-      busy(true, 'Guardando…');
+      busy(true, T('Guardando…'));
       try {
-        const r = await YTAPI.addMany('WL', ids, (d, t) => { playBtn.textContent = `Guardando… ${d}/${t}`; });
-        toast(`${r.ok} vídeo${r.ok === 1 ? '' : 's'} en «Ver más tarde»` + (r.fail ? ` · ${r.fail} no se pudieron añadir (quizá ya estaban)` : ''), !r.ok);
+        const r = await YTAPI.addMany('WL', ids, (d, t) => { playBtn.textContent = T('Guardando… {0}/{1}', d, t); });
+        toast(TN(r.ok, '{0} vídeo en «Ver más tarde»', '{0} vídeos en «Ver más tarde»') + (r.fail ? T(' · {0} no se pudieron añadir (quizá ya estaban)', r.fail) : ''), !r.ok);
       } catch (err) { toast(err.message, true); }
       busy(false); updatePlay();
     };
@@ -1047,12 +1060,12 @@
       const vids = visible();
       grid.replaceChildren(...vids.map(v => card(v, isNew(v), mode === 'seleccionar' ? { index: selected.indexOf(v.vid), toggle: toggleSelect } : null, menuCtx)));
       updatePlay();
-      if (!vids.length && done === chans.length) grid.append(h('div', { class: 'pg-empty' }, filters.onlyNew ? 'No hay vídeos nuevos desde tu última visita.' : 'No hay vídeos con estos filtros.'));
-      status.textContent = done < chans.length ? `Cargando ${done}/${chans.length}…` : `${vids.length} vídeos · ${chans.length} canales` + (filters.day ? ` · el ${Number(filters.day.slice(8))}/${Number(filters.day.slice(5, 7))}` : '') + (since ? ` · última visita ${PG.relTime(new Date(since))}` : '');
+      if (!vids.length && done === chans.length) grid.append(h('div', { class: 'pg-empty' }, filters.onlyNew ? T('No hay vídeos nuevos desde tu última visita.') : T('No hay vídeos con estos filtros.')));
+      status.textContent = done < chans.length ? T('Cargando {0}/{1}…', done, chans.length) : T('{0} vídeos · {1} canales', vids.length, chans.length) + (filters.day ? T(' · el {0}/{1}', Number(filters.day.slice(8)), Number(filters.day.slice(5, 7))) : '') + (since ? T(' · última visita {0}', PG.relTime(new Date(since))) : '');
       drawCal();
       const n = all.filter(v => isNew(v) && passBase(v)).length;
       newCount.style.display = n ? '' : 'none';
-      newCount.textContent = filters.onlyNew ? `✓ ${n} nuevo${n > 1 ? 's' : ''}` : `${n} nuevo${n > 1 ? 's' : ''}`;
+      newCount.textContent = filters.onlyNew ? '✓ ' + TN(n, '{0} nuevo', '{0} nuevos') : TN(n, '{0} nuevo', '{0} nuevos');
     };
     newCount.onclick = () => { if (virt) return; filters.onlyNew = !filters.onlyNew; render(); };
     // Avisos (no se borra nada): canales que llevan mucho sin subir o que hace tiempo que no ves
@@ -1061,9 +1074,9 @@
       if (done < chans.length || failed.has(c.id)) return null;
       const items = all.filter(v => v.channelId === c.id).sort((a, b) => b.published - a.published);
       const now = Date.now();
-      if (!items.length) return { icon: 'dormido', text: 'No tiene vídeos públicos recientes' };
+      if (!items.length) return { icon: 'dormido', text: T('No tiene vídeos públicos recientes') };
       const latest = items[0].published.getTime();
-      if (now - latest > 90 * DAY) return { icon: 'dormido', text: `Lleva mucho sin subir: su último vídeo es de ${PG.relTime(new Date(latest))}` };
+      if (now - latest > 90 * DAY) return { icon: 'dormido', text: T('Lleva mucho sin subir: su último vídeo es de {0}', PG.relTime(new Date(latest))) };
       const seen = v => !!watched[v.vid] || !!(hist && hist.vids.has(v.vid));
       const last = Math.max(chanViews[c.key] || 0, (c.handle && chanViews[c.handle]) || 0, (c.id && chanViews[c.id]) || 0, ...items.map(v => watched[v.vid] || 0));
       if (last && now - last < 30 * DAY) return null;
@@ -1073,13 +1086,13 @@
       const streak = [];
       for (const v of items) { if (v.short) continue; if (seen(v) || v.published.getTime() < covered) break; streak.push(v); }
       if (streak.length < 4 || now - streak[streak.length - 1].published.getTime() < 21 * DAY) return null;
-      return { icon: 'ojoTachado', text: (last ? `No ves este canal desde ${PG.relTime(new Date(last))}` : 'Hace tiempo que no ves este canal') + `: te has saltado sus últimos ${streak.length} vídeos (desde ${PG.relTime(streak[streak.length - 1].published)})` };
+      return { icon: 'ojoTachado', text: (last ? T('No ves este canal desde {0}', PG.relTime(new Date(last))) : T('Hace tiempo que no ves este canal')) + T(': te has saltado sus últimos {0} vídeos (desde {1})', streak.length, PG.relTime(streak[streak.length - 1].published)) };
     };
     const legendRow = h('div', { class: 'pg-legend-row' });
     const renderChips = () => {
       const flags = { dormido: 0, ojoTachado: 0 };
       chips.replaceChildren(
-        h('button', { class: 'pg-chip' + (!filters.channel ? ' on' : ''), onclick: () => { filters.channel = null; renderChips(); render(); } }, 'Todos'),
+        h('button', { class: 'pg-chip' + (!filters.channel ? ' on' : ''), onclick: () => { filters.channel = null; renderChips(); render(); } }, T('Todos')),
         ...chans.filter(c => c.id && (!virt || all.some(v => v.channelId === c.id && isNew(v) && passBase(v)))).map(c => {
           const n = all.filter(v => v.channelId === c.id && isNew(v) && passBase(v)).length;
           const hl = health(c); if (hl) flags[hl.icon]++;
@@ -1091,9 +1104,9 @@
       legendRow.remove();
       if ((flags.dormido || flags.ojoTachado) && chips.parentNode) {
         legendRow.replaceChildren(h('span', { class: 'pg-chip-legend' },
-          flags.dormido ? h('span', { class: 'pg-lg-dormido' }, PG.svgEl('dormido', 13, 'currentColor'), 'lleva tiempo sin subir') : null,
-          flags.ojoTachado ? h('span', { class: 'pg-lg-ojo' }, PG.svgEl('ojoTachado', 13, 'currentColor'), 'hace tiempo que no lo ves') : null,
-          h('span', {}, '· pasa el ratón por el canal para ver el detalle')));
+          flags.dormido ? h('span', { class: 'pg-lg-dormido' }, PG.svgEl('dormido', 13, 'currentColor'), T('lleva tiempo sin subir')) : null,
+          flags.ojoTachado ? h('span', { class: 'pg-lg-ojo' }, PG.svgEl('ojoTachado', 13, 'currentColor'), T('hace tiempo que no lo ves')) : null,
+          h('span', {}, T('· pasa el ratón por el canal para ver el detalle'))));
         chips.parentNode.after(legendRow);
       }
     };
@@ -1106,7 +1119,7 @@
       catch (e) { failed.add(c.id); throw e; }
       finally {
         done++;
-        status.textContent = `Cargando ${done}/${chans.length}…`;
+        status.textContent = T('Cargando {0}/{1}…', done, chans.length);
         clearTimeout(timer); timer = setTimeout(() => { render(); renderChips(); }, 120);
       }
       // Duraciones en segundo plano: cuando llegan se repinta la cuadrícula
@@ -1159,21 +1172,21 @@
     return h('div', { class: 'pg-hover' },
       h('span', { class: 'pg-hplay', 'aria-hidden': 'true' }, PG.svgEl('reproducir', 30, '#ffffff')),
       h('div', { class: 'pg-hbtns' },
-        act('reloj', 'Ver más tarde', async b => {
-          try { await YTAPI.watchLater(v.vid); b.classList.add('on'); toast('Guardado en «Ver más tarde»'); } catch (err) { toast(err.message, true); }
+        act('reloj', T('Ver más tarde'), async b => {
+          try { await YTAPI.watchLater(v.vid); b.classList.add('on'); toast(T('Guardado en «Ver más tarde»')); } catch (err) { toast(err.message, true); }
         }),
-        act('listaMas', 'Guardar en una lista de reproducción', async b => {
+        act('listaMas', T('Guardar en una lista de reproducción'), async b => {
           closeVideoMenu();
           const menu = h('div', { id: 'pg-vmenu', 'data-vid': v.vid });
           await showPlaylists(menu, b, v);
         }),
-        act('cola', 'Añadir a la cola', async b => { addToYTQueue(v); b.classList.add('on'); })));
+        act('cola', T('Añadir a la cola'), async b => { addToYTQueue(v); b.classList.add('on'); })));
   }
 
   // Añade el vídeo a la cola de YouTube (minirreproductor) a través de page-bridge.js
   function addToYTQueue(v) {
     window.postMessage({ source: 'ytbox', type: 'queue', vid: v.vid }, '*');
-    toast('Añadido a la cola de YouTube');
+    toast(T('Añadido a la cola de YouTube'));
   }
 
   function card(v, fresh, sel, ctx) {
@@ -1195,23 +1208,23 @@
     };
     const a = h('a', { class: 'pg-card' + (fresh ? ' pg-new' : '') + (sel && sel.index >= 0 ? ' pg-checked' : '') + (seenIt ? ' pg-watched' : ''), href, 'data-vid': v.vid },
       h('div', { class: 'pg-thumb' }, h('img', { src: `https://i.ytimg.com/vi/${v.vid}/mqdefault.jpg`, loading: 'lazy' }),
-        fresh ? h('span', { class: 'pg-new-badge' }, 'Nuevo') : null,
+        fresh ? h('span', { class: 'pg-new-badge' }, T('Nuevo')) : null,
         seenIt ? h('span', { class: 'pg-watched-badge' }, 'VISTO') : null,
         seenIt ? h('span', { class: 'pg-watched-bar' }) : null,
         !sel && ctx ? hoverActions(v, ctx) : null,
         check,
         v.short ? h('span', { class: 'pg-badge' }, 'SHORT') : (v.vid in durations ? h('span', { class: 'pg-dur' }, fmtDuration(durations[v.vid])) : null)),
       h('div', { class: 'pg-meta' },
-        ch && ch.avatar ? h('img', { class: 'pg-avatar pg-to-channel', src: ch.avatar, referrerpolicy: 'no-referrer', title: 'Ir al canal', onclick: goChannel }) : h('span', { class: 'pg-avatar' }),
+        ch && ch.avatar ? h('img', { class: 'pg-avatar pg-to-channel', src: ch.avatar, referrerpolicy: 'no-referrer', title: T('Ir al canal'), onclick: goChannel }) : h('span', { class: 'pg-avatar' }),
         h('div', {},
           h('div', { class: 'pg-title', title: v.title }, v.title),
-          h('div', { class: 'pg-sub' }, h('span', { class: 'pg-chlink', role: 'link', tabindex: '0', title: 'Ir al canal ' + (v.author || ''), onclick: goChannel,
+          h('div', { class: 'pg-sub' }, h('span', { class: 'pg-chlink', role: 'link', tabindex: '0', title: T('Ir al canal ') + (v.author || ''), onclick: goChannel,
             onauxclick: goChannel, onkeydown: e => { if (e.key === 'Enter') goChannel(e); } }, v.author)),
           h('div', { class: 'pg-sub' }, (v.views ? PG.fmtViews(v.views) + ' · ' : '') + PG.relTime(v.published)),
-          ctx && ctx.groupsOf ? h('div', { class: 'pg-card-groups' }, ...ctx.groupsOf(v).map(g => h('button', { class: 'pg-card-group', title: 'Abrir el grupo «' + g.name + '»',
+          ctx && ctx.groupsOf ? h('div', { class: 'pg-card-groups' }, ...ctx.groupsOf(v).map(g => h('button', { class: 'pg-card-group', title: T('Abrir el grupo «') + g.name + '»',
             onclick: e => { e.preventDefault(); e.stopPropagation(); openGroup(g.id); } }, PG.iconEl(g, 14), g.name))) : null,
           v.desc ? h('div', { class: 'pg-desc' }, v.desc.slice(0, 300)) : null),
-        !sel && ctx ? h('button', { class: 'pg-dots', title: 'Más acciones', onclick: e => { e.preventDefault(); e.stopPropagation(); openVideoMenu(e.currentTarget, v, ctx); } }, '⋮') : null));
+        !sel && ctx ? h('button', { class: 'pg-dots', title: T('Más acciones'), onclick: e => { e.preventDefault(); e.stopPropagation(); openVideoMenu(e.currentTarget, v, ctx); } }, '⋮') : null));
     if (!sel && ctx) a.addEventListener('click', () => ctx.opened(v));
     // En modo «Seleccionar», pulsar el vídeo lo marca en vez de abrirlo
     if (sel) a.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); sel.toggle(v.vid, a); });
@@ -1250,65 +1263,65 @@
     const item = (icon, label, fn) => h('button', { class: 'pg-vitem', onclick: async e => { e.preventDefault(); e.stopPropagation(); await fn(); } },
       h('span', { class: 'pg-vicon' }, PG.svgEl(icon, 20, 'currentColor')), h('span', {}, label));
     menu.append(
-      item('cola', 'Añadir a la cola', async () => { closeVideoMenu(); addToYTQueue(v); }),
-      item('reloj', 'Ver más tarde', async () => {
+      item('cola', T('Añadir a la cola'), async () => { closeVideoMenu(); addToYTQueue(v); }),
+      item('reloj', T('Ver más tarde'), async () => {
         closeVideoMenu();
-        try { await YTAPI.watchLater(v.vid); toast('Guardado en «Ver más tarde»'); }
+        try { await YTAPI.watchLater(v.vid); toast(T('Guardado en «Ver más tarde»')); }
         catch (err) { toast(err.message, true); }
       }),
-      item('marcador', 'Guardar en una lista de reproducción', () => showPlaylists(menu, btn, v)),
+      item('marcador', T('Guardar en una lista de reproducción'), () => showPlaylists(menu, btn, v)),
       h('div', { class: 'pg-vsep' }),
-      item('estrella', ctx.isNew(v) ? 'Quitar marca de nuevo' : 'Marcar como nuevo', async () => { closeVideoMenu(); await ctx.toggleNew(v); }),
-      item('ojo', ctx.isWatched(v) ? 'Marcar como no visto' : 'Marcar como visto', async () => { closeVideoMenu(); await ctx.toggleWatched(v); }),
+      item('estrella', ctx.isNew(v) ? T('Quitar marca de nuevo') : T('Marcar como nuevo'), async () => { closeVideoMenu(); await ctx.toggleNew(v); }),
+      item('ojo', ctx.isWatched(v) ? T('Marcar como no visto') : T('Marcar como visto'), async () => { closeVideoMenu(); await ctx.toggleWatched(v); }),
     );
     placeMenu(menu, btn);
   }
 
   async function showPlaylists(menu, btn, v) {
     menu.classList.add('pg-vmenu-lists');
-    menu.replaceChildren(h('div', { class: 'pg-vtitle' }, 'Guardar en…'), h('div', { class: 'pg-vloading' }, 'Cargando tus listas…'));
+    menu.replaceChildren(h('div', { class: 'pg-vtitle' }, T('Guardar en…')), h('div', { class: 'pg-vloading' }, T('Cargando tus listas…')));
     placeMenu(menu, btn);
     let lists;
     try { lists = await YTAPI.getPlaylists(v.vid); }
-    catch (err) { menu.replaceChildren(h('div', { class: 'pg-vtitle' }, 'Guardar en…'), h('div', { class: 'pg-vloading err' }, err.message)); return; }
+    catch (err) { menu.replaceChildren(h('div', { class: 'pg-vtitle' }, T('Guardar en…')), h('div', { class: 'pg-vloading err' }, err.message)); return; }
     const rows = lists.map(pl => {
       const cb = h('input', { type: 'checkbox' }); cb.checked = pl.contains;
       cb.addEventListener('change', async () => {
         cb.disabled = true;
         try {
-          if (cb.checked) { await YTAPI.addToPlaylist(pl.id, v.vid); toast(`Guardado en «${pl.title}»`); }
-          else { await YTAPI.removeFromPlaylist(pl.id, v.vid); toast(`Quitado de «${pl.title}»`); }
+          if (cb.checked) { await YTAPI.addToPlaylist(pl.id, v.vid); toast(T('Guardado en «{0}»', pl.title)); }
+          else { await YTAPI.removeFromPlaylist(pl.id, v.vid); toast(T('Quitado de «{0}»', pl.title)); }
         } catch (err) { cb.checked = !cb.checked; toast(err.message, true); }
         cb.disabled = false;
       });
       return h('label', { class: 'pg-vlist' }, cb, h('span', {}, pl.title || pl.id));
     });
-    const name = h('input', { type: 'text', class: 'pg-vnew', placeholder: '+ Nueva lista (privada)…' });
+    const name = h('input', { type: 'text', class: 'pg-vnew', placeholder: T('+ Nueva lista (privada)…') });
     ['keydown', 'keyup', 'keypress'].forEach(t => name.addEventListener(t, e => e.stopPropagation()));
     name.addEventListener('keydown', async e => {
       if (e.key !== 'Enter' || !name.value.trim()) return;
       name.disabled = true;
-      try { await YTAPI.createPlaylist(name.value.trim(), v.vid); toast(`Creada «${name.value.trim()}» con este vídeo`); closeVideoMenu(); }
+      try { await YTAPI.createPlaylist(name.value.trim(), v.vid); toast(T('Creada «{0}» con este vídeo', name.value.trim())); closeVideoMenu(); }
       catch (err) { toast(err.message, true); name.disabled = false; }
     });
-    menu.replaceChildren(h('div', { class: 'pg-vtitle' }, 'Guardar en…'),
-      h('div', { class: 'pg-vlists' }, rows.length ? rows : h('div', { class: 'pg-vloading' }, 'No tienes listas todavía.')), name);
+    menu.replaceChildren(h('div', { class: 'pg-vtitle' }, T('Guardar en…')),
+      h('div', { class: 'pg-vlists' }, rows.length ? rows : h('div', { class: 'pg-vloading' }, T('No tienes listas todavía.'))), name);
     placeMenu(menu, btn);
   }
 
   // Elegir playlist para guardar varios vídeos de golpe (botón «Aplicar» del grupo)
   async function showBulkPlaylists(btn, ids, busy) {
     closeVideoMenu();
-    const n = ids.length, word = n === 1 ? 'vídeo' : 'vídeos';
+    const n = ids.length, word = n === 1 ? T('vídeo') : T('vídeos');
     const menu = h('div', { id: 'pg-vmenu', class: 'pg-vmenu-lists', 'data-vid': '__bulk' });
-    const title = h('div', { class: 'pg-vtitle' }, `Guardar ${n} ${word} en…`);
-    menu.append(title, h('div', { class: 'pg-vloading' }, 'Cargando tus listas…'));
+    const title = h('div', { class: 'pg-vtitle' }, T('Guardar {0} {1} en…', n, word));
+    menu.append(title, h('div', { class: 'pg-vloading' }, T('Cargando tus listas…')));
     placeMenu(menu, btn);
     const save = async (label, fn) => {
-      closeVideoMenu(); busy(true, 'Guardando…');
+      closeVideoMenu(); busy(true, T('Guardando…'));
       try {
         const r = await fn();
-        toast(`${r.ok} ${r.ok === 1 ? 'vídeo' : 'vídeos'} en «${label}»` + (r.fail ? ` · ${r.fail} no se pudieron añadir (quizá ya estaban)` : ''), !r.ok);
+        toast(TN(r.ok, '{0} vídeo en «{1}»', '{0} vídeos en «{1}»', label) + (r.fail ? T(' · {0} no se pudieron añadir (quizá ya estaban)', r.fail) : ''), !r.ok);
       } catch (err) { toast(err.message, true); }
       busy(false); btn.disabled = false;
     };
@@ -1316,20 +1329,20 @@
     try { lists = await YTAPI.getPlaylists(ids[0]); }
     catch (err) { menu.replaceChildren(title, h('div', { class: 'pg-vloading err' }, err.message)); return; }
     lists = lists.filter(pl => pl.id !== 'WL');
-    const rows = lists.map(pl => h('button', { class: 'pg-vitem', onclick: e => { e.stopPropagation(); save(pl.title || pl.id, () => YTAPI.addMany(pl.id, ids, (d, t) => { btn.textContent = `Guardando… ${d}/${t}`; })); } },
+    const rows = lists.map(pl => h('button', { class: 'pg-vitem', onclick: e => { e.stopPropagation(); save(pl.title || pl.id, () => YTAPI.addMany(pl.id, ids, (d, t) => { btn.textContent = T('Guardando… {0}/{1}', d, t); })); } },
       h('span', { class: 'pg-vicon' }, PG.svgEl('lista', 18, 'currentColor')), h('span', {}, pl.title || pl.id)));
-    const name = h('input', { type: 'text', class: 'pg-vnew', placeholder: '+ Nueva lista (privada)…' });
+    const name = h('input', { type: 'text', class: 'pg-vnew', placeholder: T('+ Nueva lista (privada)…') });
     ['keydown', 'keyup', 'keypress'].forEach(t => name.addEventListener(t, e => e.stopPropagation()));
     name.addEventListener('keydown', e => {
       const t = name.value.trim();
       if (e.key !== 'Enter' || !t) return;
       save(t, async () => {
         const pid = await YTAPI.createPlaylist(t, ids[0]);
-        const r = ids.length > 1 ? await YTAPI.addMany(pid, ids.slice(1), (d, tt) => { btn.textContent = `Guardando… ${d + 1}/${tt + 1}`; }) : { ok: 0, fail: 0 };
+        const r = ids.length > 1 ? await YTAPI.addMany(pid, ids.slice(1), (d, tt) => { btn.textContent = T('Guardando… {0}/{1}', d + 1, tt + 1); }) : { ok: 0, fail: 0 };
         return { ok: r.ok + 1, fail: r.fail };
       });
     });
-    menu.replaceChildren(title, h('div', { class: 'pg-vlists' }, rows.length ? rows : h('div', { class: 'pg-vloading' }, 'No tienes listas todavía.')), name);
+    menu.replaceChildren(title, h('div', { class: 'pg-vlists' }, rows.length ? rows : h('div', { class: 'pg-vloading' }, T('No tienes listas todavía.'))), name);
     placeMenu(menu, btn);
     setTimeout(() => (rows.length ? null : name.focus()), 0);
   }
@@ -1435,10 +1448,10 @@
     hw.onchange = async () => { feedState.hideWatched = hw.checked; state.settings.feedHideWatched = hw.checked; applyFeedFilter(); await PG.save({ settings: state.settings }); };
     b.replaceChildren(
       appLogo(20), h('span', { class: 'pg-feed-label' }, 'YTBox'),
-      h('button', { class: 'pg-chip' + (!feedState.group ? ' on' : ''), onclick: () => { feedState.group = null; drawFeedBar(b); applyFeedFilter(); } }, 'Todos'),
+      h('button', { class: 'pg-chip' + (!feedState.group ? ' on' : ''), onclick: () => { feedState.group = null; drawFeedBar(b); applyFeedFilter(); } }, T('Todos')),
       ...state.groups.map(g => h('button', { class: 'pg-chip' + (feedState.group === g.id ? ' on' : ''), onclick: () => { feedState.group = feedState.group === g.id ? null : g.id; drawFeedBar(b); applyFeedFilter(); } }, PG.iconEl(g, 20), g.name)),
       h('div', { class: 'pg-ov-spacer' }),
-      h('label', { class: 'pg-toggle' }, hw, 'Ocultar vistos'));
+      h('label', { class: 'pg-toggle' }, hw, T('Ocultar vistos')));
   }
   let watchedCache = {};
   chrome.storage.local.get('watched').then(r => watchedCache = r.watched || {});
@@ -1469,7 +1482,7 @@
     const cfg = Object.assign({}, YTBoxTV.DEFAULTS, state.settings.tv || {});
     const groupsSel = new Set(cfg.groups.filter(id => state.groups.some(g => g.id === id)));
     const chansSel = new Set(cfg.channels.filter(k => state.channels[k]));
-    const root = h('div', { id: 'pg-tv', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Modo TV' });
+    const root = h('div', { id: 'pg-tv', role: 'dialog', 'aria-modal': 'true', 'aria-label': T('Modo TV') });
     ['keydown', 'keyup', 'keypress'].forEach(t => root.addEventListener(t, e => { e.stopPropagation(); if (t === 'keydown' && e.key === 'Escape') root.remove(); }));
     root.addEventListener('mousedown', e => { if (e.target === root) root.remove(); });
     // Esc también cuando el foco se ha quedado fuera del cuadro (p. ej. tras redibujar los presets)
@@ -1484,21 +1497,21 @@
       return [...keys].map(k => state.channels[k]).filter(Boolean);
     };
     const count = h('span', { class: 'pg-tv-count' });
-    const updateCount = () => { const n = selectedChannels().length; count.textContent = n ? `${n} canal${n > 1 ? 'es' : ''} seleccionado${n > 1 ? 's' : ''}` : 'Ningún canal seleccionado'; };
+    const updateCount = () => { const n = selectedChannels().length; count.textContent = n ? TN(n, '{0} canal seleccionado', '{0} canales seleccionados') : T('Ningún canal seleccionado'); };
 
     // Grupos
     const gchips = h('div', { class: 'pg-tv-chips' });
     const drawGroups = () => {
       const allOn = state.groups.length > 0 && state.groups.every(g => groupsSel.has(g.id));
       gchips.replaceChildren(
-        ...(state.groups.length > 1 ? [h('button', { class: 'pg-chip pg-chip-all', title: allOn ? 'Quitar todos los grupos' : 'Elegir todos los grupos',
+        ...(state.groups.length > 1 ? [h('button', { class: 'pg-chip pg-chip-all', title: allOn ? T('Quitar todos los grupos') : T('Elegir todos los grupos'),
           onclick: () => { if (allOn) groupsSel.clear(); else state.groups.forEach(g => groupsSel.add(g.id)); drawGroups(); updateCount(); } },
-          PG.svgEl('check', 16, 'currentColor'), allOn ? 'Desmarcar todos' : 'Marcar todos')] : []),
+          PG.svgEl('check', 16, 'currentColor'), allOn ? T('Desmarcar todos') : T('Marcar todos'))] : []),
         ...state.groups.map(g => h('button', { class: 'pg-chip' + (groupsSel.has(g.id) ? ' on' : ''), onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); } }, PG.iconEl(g, 20), g.name)));
     };
     drawGroups();
     // Canales sueltos
-    const q = h('input', { type: 'search', class: 'pg-search', placeholder: 'Buscar canal…', style: 'width:100%;box-sizing:border-box' });
+    const q = h('input', { type: 'search', class: 'pg-search', placeholder: T('Buscar canal…'), style: 'width:100%;box-sizing:border-box' });
     const clist = h('div', { class: 'pg-tv-clist' });
     const allCh = Object.values(state.channels).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
     const sel = selectedChips(chansSel, () => { drawCh(); updateCount(); });
@@ -1512,41 +1525,41 @@
       }));
     };
     q.addEventListener('input', drawCh); drawCh();
-    const details = h('details', { class: 'pg-tv-details' }, h('summary', {}, 'Añadir canales sueltos'), q, clist);
+    const details = h('details', { class: 'pg-tv-details' }, h('summary', {}, T('Añadir canales sueltos')), q, clist);
     if (chansSel.size) details.open = true;
 
     // Qué vídeos
     const onlyNew = h('input', { type: 'checkbox' }); onlyNew.checked = !!cfg.onlyUnwatched;
-    const ageSel = h('select', { class: 'pg-mode' }, ...[['all', 'Cualquier fecha'], ['day', 'Último día'], ['3days', 'Últimos 3 días'], ['week', 'Última semana'], ['month', 'Último mes']].map(([v, t]) => h('option', { value: v }, t)));
+    const ageSel = h('select', { class: 'pg-mode' }, ...[['all', T('Cualquier fecha')], ['day', T('Último día')], ['3days', T('Últimos 3 días')], ['week', T('Última semana')], ['month', T('Último mes')]].map(([v, t]) => h('option', { value: v }, t)));
     ageSel.value = cfg.maxAge;
-    const lenSel = h('select', { class: 'pg-mode' }, ...YTBoxTV.MAXLENS.map(([v, t]) => h('option', { value: String(v) }, t)));
+    const lenSel = h('select', { class: 'pg-mode' }, ...YTBoxTV.MAXLENS.map(([v, t]) => h('option', { value: String(v) }, T(t))));
     lenSel.value = String(cfg.maxLen || 0); if (!lenSel.value) lenSel.value = '0';
     // Duración
     const amount = h('input', { type: 'number', min: '1', step: '1', class: 'pg-search pg-tv-num', value: String(cfg.amount) });
-    const unit = h('select', { class: 'pg-mode' }, h('option', { value: 'min' }, 'minutos'), h('option', { value: 'h' }, 'horas'));
+    const unit = h('select', { class: 'pg-mode' }, h('option', { value: 'min' }, T('minutos')), h('option', { value: 'h' }, T('horas')));
     unit.value = cfg.unit;
     const quick = h('div', { class: 'pg-tv-chips' }, ...[[30, 'min', '30 min'], [1, 'h', '1 h'], [2, 'h', '2 h'], [4, 'h', '4 h']].map(([n, u, t]) =>
       h('button', { class: 'pg-chip', onclick: () => { amount.value = n; unit.value = u; } }, t)));
 
     // Cómo: vídeos completos o picoteo (solo lo más visto de cada uno)
     let style = cfg.style === 'picoteo' ? 'picoteo' : 'full';
-    const clipSel = h('select', { class: 'pg-mode' }, ...YTBoxTV.CLIPS.map(([v, t]) => h('option', { value: String(v) }, t)));
+    const clipSel = h('select', { class: 'pg-mode' }, ...YTBoxTV.CLIPS.map(([v, t]) => h('option', { value: String(v) }, T(t))));
     clipSel.value = String(cfg.clip || 60); if (!clipSel.value) clipSel.value = '60';
     const styleBox = h('div', { class: 'pg-tv-chips' });
-    const clipRow = h('div', { class: 'pg-tv-row' }, h('span', {}, 'Trozo de cada vídeo:'), clipSel);
+    const clipRow = h('div', { class: 'pg-tv-row' }, h('span', {}, T('Trozo de cada vídeo:')), clipSel);
     const styleHelp = h('p', { class: 'pg-tv-help' });
     const drawStyle = () => {
-      styleBox.replaceChildren(...[['full', '📺 Vídeos completos'], ['picoteo', '🍿 Picoteo']].map(([v, t]) =>
+      styleBox.replaceChildren(...[['full', T('📺 Vídeos completos')], ['picoteo', T('🍿 Picoteo')]].map(([v, t]) =>
         h('button', { class: 'pg-chip' + (style === v ? ' on' : ''), onclick: () => { style = v; drawStyle(); } }, t)));
       clipRow.style.display = style === 'picoteo' ? '' : 'none';
       styleHelp.textContent = style === 'picoteo'
-        ? 'Solo se reproduce el trozo más visto de cada vídeo (según la curva de «lo más visto» de YouTube) y salta solo al siguiente. Ideal para ponerte al día rápido.'
-        : 'Se reproduce cada vídeo entero.';
+        ? T('Solo se reproduce el trozo más visto de cada vídeo (según la curva de «lo más visto» de YouTube) y salta solo al siguiente. Ideal para ponerte al día rápido.')
+        : T('Se reproduce cada vídeo entero.');
     };
     drawStyle();
 
     const status = h('div', { class: 'pg-tv-status', role: 'status' });
-    const go = h('button', { class: 'pg-play pg-tv-go' }, '▶ VER');
+    const go = h('button', { class: 'pg-play pg-tv-go' }, T('▶ VER'));
     const current = () => ({ groups: [...groupsSel], channels: [...chansSel], onlyUnwatched: onlyNew.checked, maxAge: ageSel.value, amount: Number(amount.value) || 0, unit: unit.value, style, clip: Number(clipSel.value) || 60, maxLen: Number(lenSel.value) || 0 });
     const applyCfg = c => {
       c = Object.assign({}, YTBoxTV.DEFAULTS, c);
@@ -1560,31 +1573,31 @@
 
     // Preconfiguraciones guardadas
     let activeId = null;
-    const nameIn = h('input', { type: 'text', class: 'pg-search pg-tv-name', placeholder: 'Nombre, p. ej. Dormir', maxlength: '40' });
+    const nameIn = h('input', { type: 'text', class: 'pg-search pg-tv-name', placeholder: T('Nombre, p. ej. Dormir'), maxlength: '40' });
     const presetBox = h('div', { class: 'pg-tv-presets' });
     const loadPreset = p => { activeId = p.id; applyCfg(p.cfg); nameIn.value = p.name; status.className = 'pg-tv-status'; status.textContent = ''; drawPresets(); };
     const drawPresets = () => {
       const list = YTBoxTV.presets(state);
       presetBox.replaceChildren(...(list.length ? list.map(p => {
-        const del = h('button', { class: 'pg-tv-preset-x', title: 'Borrar', 'aria-label': 'Borrar ' + p.name }, '✕');
+        const del = h('button', { class: 'pg-tv-preset-x', title: T('Borrar'), 'aria-label': T('Borrar ') + p.name }, '✕');
         del.onclick = () => {
-          if (!del.dataset.armed) { del.dataset.armed = '1'; del.textContent = '¿Borrar?'; setTimeout(() => { if (del.isConnected) { delete del.dataset.armed; del.textContent = '✕'; } }, 3000); return; }
+          if (!del.dataset.armed) { del.dataset.armed = '1'; del.textContent = T('¿Borrar?'); setTimeout(() => { if (del.isConnected) { delete del.dataset.armed; del.textContent = '✕'; } }, 3000); return; }
           YTBoxTV.deletePreset(state, p.id); if (activeId === p.id) activeId = null;
           PG.save({ settings: state.settings }); drawPresets();
         };
         return h('div', { class: 'pg-tv-preset' + (p.id === activeId ? ' on' : '') },
-          h('button', { class: 'pg-tv-preset-load', title: `Cargar «${p.name}»\n${YTBoxTV.summary(p.cfg, state)}`, onclick: () => loadPreset(p) }, p.name),
-          h('button', { class: 'pg-tv-preset-play', title: 'Ver ya', 'aria-label': 'Ver ' + p.name, onclick: () => { loadPreset(p); go.click(); } }, '▶'), del);
-      }) : [h('span', { class: 'pg-tv-count' }, 'Aún no tienes ninguna. Configura abajo y guárdala con un nombre.')]));
+          h('button', { class: 'pg-tv-preset-load', title: T('Cargar «{0}»\n{1}', p.name, YTBoxTV.summary(p.cfg, state)), onclick: () => loadPreset(p) }, p.name),
+          h('button', { class: 'pg-tv-preset-play', title: T('Ver ya'), 'aria-label': T('Ver ') + p.name, onclick: () => { loadPreset(p); go.click(); } }, '▶'), del);
+      }) : [h('span', { class: 'pg-tv-count' }, T('Aún no tienes ninguna. Configura abajo y guárdala con un nombre.'))]));
     };
-    const saveBtn = h('button', { class: 'pg-btn pg-tv-save' }, '💾 Guardar');
+    const saveBtn = h('button', { class: 'pg-btn pg-tv-save' }, T('💾 Guardar'));
     saveBtn.onclick = () => {
       const name = nameIn.value.trim();
-      if (!name) { status.className = 'pg-tv-status err'; status.textContent = 'Ponle un nombre a la preconfiguración.'; nameIn.focus(); return; }
+      if (!name) { status.className = 'pg-tv-status err'; status.textContent = T('Ponle un nombre a la preconfiguración.'); nameIn.focus(); return; }
       const exists = YTBoxTV.presets(state).some(x => x.name.toLowerCase() === name.toLowerCase());
       const p = YTBoxTV.savePreset(state, name, current()); activeId = p.id;
       PG.save({ settings: state.settings }); drawPresets();
-      status.className = 'pg-tv-status'; status.textContent = exists ? `«${p.name}» actualizada.` : `«${p.name}» guardada.`;
+      status.className = 'pg-tv-status'; status.textContent = exists ? T('«{0}» actualizada.', p.name) : T('«{0}» guardada.', p.name);
     };
     nameIn.addEventListener('keydown', e => { if (e.key === 'Enter') saveBtn.click(); });
     drawPresets();
@@ -1598,18 +1611,18 @@
       bar.classList.toggle('indet', !m);
       bar.firstChild.style.width = m ? Math.round(100 * Number(m[1]) / Math.max(1, Number(m[2]))) + '%' : '';
     };
-    const goLabel = () => (preview && preview.picked.length ? '▶ VER ESTA LISTA' : '▶ VER');
+    const goLabel = () => (preview && preview.picked.length ? T('▶ VER ESTA LISTA') : T('▶ VER'));
     const setBusy = on => {
       box.classList.toggle('pg-busy', on);
       go.disabled = previewBtn.disabled = on;
-      if (on) { bar.classList.add('indet'); bar.firstChild.style.width = ''; go.replaceChildren(h('span', { class: 'pg-spin pg-spin-w', 'aria-hidden': 'true' }), 'Cargando…'); }
+      if (on) { bar.classList.add('indet'); bar.firstChild.style.width = ''; go.replaceChildren(h('span', { class: 'pg-spin pg-spin-w', 'aria-hidden': 'true' }), T('Cargando…')); }
       else go.textContent = goLabel();
     };
 
     // Previsualización: la lista generada, con opción de quitar vídeos antes de verla
     let preview = null; // { picked, cfg, picoteo, target }
     const previewBox = h('div', { class: 'pg-tv-preview', style: 'display:none' });
-    const previewBtn = h('button', { class: 'pg-btn pg-tv-prevbtn', title: 'Ver qué vídeos se van a cargar antes de reproducirlos' }, '👁 Previsualizar');
+    const previewBtn = h('button', { class: 'pg-btn pg-tv-prevbtn', title: T('Ver qué vídeos se van a cargar antes de reproducirlos') }, T('👁 Previsualizar'));
     const segDur = v => preview && preview.picoteo ? v.end - v.start : v.seconds;
     const chName = id => (Object.values(state.channels).find(c => c.id === id) || {}).name || '';
     const drawPreview = () => {
@@ -1620,26 +1633,26 @@
       previewBox.style.display = '';
       previewBox.replaceChildren(
         h('div', { class: 'pg-tv-prevhead' },
-          h('b', {}, picked.length ? `${picked.length} ${picoteo ? 'trozos' : 'vídeos'} · ${YTBoxTV.fmtDur(total)}` : 'Has quitado todos los vídeos'),
+          h('b', {}, picked.length ? T(picoteo ? '{0} trozos · {1}' : '{0} vídeos · {1}', picked.length, YTBoxTV.fmtDur(total)) : T('Has quitado todos los vídeos')),
           h('span', { class: 'pg-tv-prevtools' },
-            h('button', { class: 'pg-btn pg-tv-mini', title: 'Generar otra lista distinta', onclick: () => makePreview() }, '🔀 Otra'),
-            h('button', { class: 'pg-btn pg-tv-mini', title: 'Descartar la previsualización', onclick: () => { preview = null; drawPreview(); } }, 'Descartar'))),
+            h('button', { class: 'pg-btn pg-tv-mini', title: T('Generar otra lista distinta'), onclick: () => makePreview() }, T('🔀 Otra')),
+            h('button', { class: 'pg-btn pg-tv-mini', title: T('Descartar la previsualización'), onclick: () => { preview = null; drawPreview(); } }, T('Descartar')))),
         h('ol', { class: 'pg-tv-prevlist' }, ...picked.map((v, i) => h('li', {},
-          h('a', { class: 'pg-tv-prevthumb', href: '/watch?v=' + v.vid + (picoteo ? '&t=' + Math.round(v.start) + 's' : ''), target: '_blank', rel: 'noopener', title: 'Abrir en otra pestaña' },
+          h('a', { class: 'pg-tv-prevthumb', href: '/watch?v=' + v.vid + (picoteo ? '&t=' + Math.round(v.start) + 's' : ''), target: '_blank', rel: 'noopener', title: T('Abrir en otra pestaña') },
             h('img', { src: `https://i.ytimg.com/vi/${v.vid}/mqdefault.jpg`, loading: 'lazy', alt: '' }),
             h('span', { class: 'pg-tv-prevdur' }, picoteo ? `${clock(v.start)}–${clock(v.end)}` : clock(v.seconds))),
-          h('span', { class: 'pg-tv-previnfo' }, h('span', { class: 'pg-tv-prevtitle' }, v.title || v.vid), h('small', {}, chName(v.channelId) + (picoteo && v.hot ? ' · 🔥 lo más visto' : ''))),
-          h('button', { class: 'pg-tv-prevx', title: 'Quitar de la lista', 'aria-label': 'Quitar ' + (v.title || v.vid), onclick: () => { preview.picked.splice(i, 1); drawPreview(); } }, '✕')))));
+          h('span', { class: 'pg-tv-previnfo' }, h('span', { class: 'pg-tv-prevtitle' }, v.title || v.vid), h('small', {}, chName(v.channelId) + (picoteo && v.hot ? T(' · 🔥 lo más visto') : ''))),
+          h('button', { class: 'pg-tv-prevx', title: T('Quitar de la lista'), 'aria-label': T('Quitar ') + (v.title || v.vid), onclick: () => { preview.picked.splice(i, 1); drawPreview(); } }, '✕')))));
     };
     const makePreview = async () => {
       const newCfg = current();
       status.className = 'pg-tv-status';
       state.settings.tv = newCfg; PG.save({ settings: state.settings });
-      setBusy(true); progress('Preparando…');
+      setBusy(true); progress(T('Preparando…'));
       try {
         const r = await YTBoxTV.run(newCfg, state, progress);
         preview = { picked: r.picked, cfg: newCfg, picoteo: !!r.picoteo, target: r.target };
-        status.textContent = r.total < r.target * 0.9 ? 'No hay más vídeos que cumplan las condiciones.' : 'Quita los que no te apetezcan y pulsa VER.';
+        status.textContent = r.total < r.target * 0.9 ? T('No hay más vídeos que cumplan las condiciones.') : T('Quita los que no te apetezcan y pulsa VER.');
         drawPreview();
         previewBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
       } catch (e) { status.className += ' err'; status.textContent = e.message; }
@@ -1648,12 +1661,12 @@
     previewBtn.onclick = makePreview;
     const play = async (picked, cfgUsed, picoteo) => {
       const total = picked.reduce((a, v) => a + (picoteo ? v.end - v.start : v.seconds), 0);
-      const what = picoteo ? `${picked.length} trozos` : `${picked.length} vídeos`;
+      const what = picoteo ? `${picked.length} trozos` : T('{0} vídeos', picked.length);
       setBusy(true);
       const url = await YTBoxTV.start(picked, cfgUsed, state, progress);
-      progress(`${what} · ${YTBoxTV.fmtDur(total)}. Abriendo…`);
+      progress(T('{0} · {1}. Abriendo…', what, YTBoxTV.fmtDur(total)));
       bar.classList.remove('indet'); bar.firstChild.style.width = '100%';
-      toast(`Modo TV${picoteo ? ' · picoteo' : ''}: ${what} · ${YTBoxTV.fmtDur(total)}`);
+      toast(T('Modo TV{0}: {1} · {2}', picoteo ? T(' · picoteo') : '', what, YTBoxTV.fmtDur(total)));
       setTimeout(() => { root.remove(); closeOverlay(); location.href = url; }, 600);
     };
 
@@ -1662,28 +1675,28 @@
       const newCfg = current();
       status.className = 'pg-tv-status';
       state.settings.tv = newCfg; PG.save({ settings: state.settings });
-      setBusy(true); progress('Preparando…');
+      setBusy(true); progress(T('Preparando…'));
       try {
         const r = await YTBoxTV.run(newCfg, state, progress);
-        if (r.total < r.target * 0.9) toast('No hay más vídeos que cumplan las condiciones');
+        if (r.total < r.target * 0.9) toast(T('No hay más vídeos que cumplan las condiciones'));
         await play(r.picked, newCfg, !!r.picoteo);
       } catch (e) { status.className += ' err'; status.textContent = e.message; setBusy(false); }
     };
 
     box.append(
-      h('div', { class: 'pg-tv-head' }, h('span', { class: 'pg-tv-ico' }, PG.svgEl('tv', 26, 'currentColor')), h('h2', {}, 'Modo TV'),
-        h('button', { class: 'pg-btn', title: 'Cerrar (Esc)', 'aria-label': 'Cerrar', onclick: () => root.remove() }, '✕')),
-      h('p', { class: 'pg-tv-intro' }, 'Crea una lista con vídeos al azar de los canales que elijas y la reproduce, con la duración total que indiques.'),
-      h('section', {}, h('h3', {}, 'Mis preconfiguraciones'), presetBox),
-      h('section', {}, h('h3', {}, '¿De qué canales?'), gchips, sel.box, details, count),
-      h('section', {}, h('h3', {}, '¿Qué vídeos?'),
-        h('label', { class: 'pg-toggle' }, onlyNew, 'Solo vídeos que no he visto'),
-        h('div', { class: 'pg-tv-row' }, h('span', {}, 'Subidos en'), ageSel),
-        h('div', { class: 'pg-tv-row' }, h('span', {}, 'Duración máxima de cada vídeo'), lenSel)),
-      h('section', {}, h('h3', {}, '¿Cuánto tiempo?'),
+      h('div', { class: 'pg-tv-head' }, h('span', { class: 'pg-tv-ico' }, PG.svgEl('tv', 26, 'currentColor')), h('h2', {}, T('Modo TV')),
+        h('button', { class: 'pg-btn', title: T('Cerrar (Esc)'), 'aria-label': T('Cerrar'), onclick: () => root.remove() }, '✕')),
+      h('p', { class: 'pg-tv-intro' }, T('Crea una lista con vídeos al azar de los canales que elijas y la reproduce, con la duración total que indiques.')),
+      h('section', {}, h('h3', {}, T('Mis preconfiguraciones')), presetBox),
+      h('section', {}, h('h3', {}, T('¿De qué canales?')), gchips, sel.box, details, count),
+      h('section', {}, h('h3', {}, T('¿Qué vídeos?')),
+        h('label', { class: 'pg-toggle' }, onlyNew, T('Solo vídeos que no he visto')),
+        h('div', { class: 'pg-tv-row' }, h('span', {}, T('Subidos en')), ageSel),
+        h('div', { class: 'pg-tv-row' }, h('span', {}, T('Duración máxima de cada vídeo')), lenSel)),
+      h('section', {}, h('h3', {}, T('¿Cuánto tiempo?')),
         h('div', { class: 'pg-tv-row' }, amount, unit), quick),
-      h('section', {}, h('h3', {}, '¿Cómo lo ves?'), styleBox, clipRow, styleHelp),
-      h('section', {}, h('h3', {}, 'Guardar como preconfiguración'), h('div', { class: 'pg-tv-row' }, nameIn, saveBtn)),
+      h('section', {}, h('h3', {}, T('¿Cómo lo ves?')), styleBox, clipRow, styleHelp),
+      h('section', {}, h('h3', {}, T('Guardar como preconfiguración')), h('div', { class: 'pg-tv-row' }, nameIn, saveBtn)),
       h('div', { class: 'pg-tv-foot' }, spin, status, previewBtn, go),
       bar,
       previewBox);
@@ -1702,12 +1715,12 @@
       const list = [...set].map(k => state.channels[k]).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
       box.style.display = list.length ? '' : 'none';
       box.replaceChildren(
-        h('span', { class: 'pg-selchips-label' }, `Canales sueltos (${list.length}):`),
+        h('span', { class: 'pg-selchips-label' }, T('Canales sueltos ({0}):', list.length)),
         ...list.map(c => h('span', { class: 'pg-selchip' },
           c.avatar ? h('img', { src: c.avatar, referrerpolicy: 'no-referrer', alt: '' }) : h('span', { class: 'pg-tv-av' }),
           h('span', { class: 'pg-selchip-name' }, c.name),
-          h('button', { class: 'pg-selchip-x', title: 'Quitar', 'aria-label': 'Quitar ' + c.name, onclick: () => { set.delete(c.key); onChange(); } }, '×'))),
-        ...(list.length > 1 ? [h('button', { class: 'pg-selchip-all', onclick: () => { set.clear(); onChange(); } }, 'Quitar todos')] : []));
+          h('button', { class: 'pg-selchip-x', title: T('Quitar'), 'aria-label': T('Quitar ') + c.name, onclick: () => { set.delete(c.key); onChange(); } }, '×'))),
+        ...(list.length > 1 ? [h('button', { class: 'pg-selchip-all', onclick: () => { set.clear(); onChange(); } }, T('Quitar todos'))] : []));
     };
     return { box, draw };
   }
@@ -1718,7 +1731,7 @@
     const cfg = Object.assign({}, YTBoxDiscover.DEFAULTS, state.settings.discover || {});
     const groupsSel = new Set(cfg.groups.filter(id => state.groups.some(g => g.id === id)));
     const chansSel = new Set(cfg.channels.filter(k => state.channels[k]));
-    const root = h('div', { id: 'pg-tv', class: 'pg-disc', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Descubrir canales' });
+    const root = h('div', { id: 'pg-tv', class: 'pg-disc', role: 'dialog', 'aria-modal': 'true', 'aria-label': T('Descubrir canales') });
     ['keydown', 'keyup', 'keypress'].forEach(t => root.addEventListener(t, e => { e.stopPropagation(); if (t === 'keydown' && e.key === 'Escape') root.remove(); }));
     root.addEventListener('mousedown', e => { if (e.target === root) root.remove(); });
     const onEsc = e => { if (!root.isConnected) return window.removeEventListener('keydown', onEsc, true); if (e.key === 'Escape' && !$('#pg-disc-gmenu')) { e.stopPropagation(); root.remove(); } };
@@ -1728,18 +1741,18 @@
 
     const count = h('span', { class: 'pg-tv-count' });
     const selected = () => YTBoxTV.selectedChannels({ groups: [...groupsSel], channels: [...chansSel] }, state);
-    const updateCount = () => { const n = selected().length; count.textContent = n ? `${n} canal${n > 1 ? 'es' : ''} seleccionado${n > 1 ? 's' : ''}` + (n > 12 ? ' · se mirarán 12 al azar cada vez' : '') : 'Ningún canal seleccionado'; };
+    const updateCount = () => { const n = selected().length; count.textContent = n ? TN(n, '{0} canal seleccionado', '{0} canales seleccionados') + (n > 12 ? T(' · se mirarán 12 al azar cada vez') : '') : T('Ningún canal seleccionado'); };
     const gchips = h('div', { class: 'pg-tv-chips' });
     const drawGroups = () => {
       const allOn = state.groups.length > 0 && state.groups.every(g => groupsSel.has(g.id));
       gchips.replaceChildren(
-        ...(state.groups.length > 1 ? [h('button', { class: 'pg-chip pg-chip-all', title: allOn ? 'Quitar todos los grupos' : 'Elegir todos los grupos',
+        ...(state.groups.length > 1 ? [h('button', { class: 'pg-chip pg-chip-all', title: allOn ? T('Quitar todos los grupos') : T('Elegir todos los grupos'),
           onclick: () => { if (allOn) groupsSel.clear(); else state.groups.forEach(g => groupsSel.add(g.id)); drawGroups(); updateCount(); } },
-          PG.svgEl('check', 16, 'currentColor'), allOn ? 'Desmarcar todos' : 'Marcar todos')] : []),
+          PG.svgEl('check', 16, 'currentColor'), allOn ? T('Desmarcar todos') : T('Marcar todos'))] : []),
         ...state.groups.map(g => h('button', { class: 'pg-chip' + (groupsSel.has(g.id) ? ' on' : ''), onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); } }, PG.iconEl(g, 20), g.name)));
     };
     drawGroups();
-    const q = h('input', { type: 'search', class: 'pg-search', placeholder: 'Buscar canal…', style: 'width:100%;box-sizing:border-box' });
+    const q = h('input', { type: 'search', class: 'pg-search', placeholder: T('Buscar canal…'), style: 'width:100%;box-sizing:border-box' });
     const clist = h('div', { class: 'pg-tv-clist' });
     const allCh = Object.values(state.channels).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
     const sel = selectedChips(chansSel, () => { drawCh(); updateCount(); });
@@ -1753,12 +1766,12 @@
       }));
     };
     q.addEventListener('input', drawCh); drawCh();
-    const details = h('details', { class: 'pg-tv-details' }, h('summary', {}, 'Elegir canales sueltos'), q, clist);
+    const details = h('details', { class: 'pg-tv-details' }, h('summary', {}, T('Elegir canales sueltos')), q, clist);
     if (chansSel.size) details.open = true;
 
     const status = h('div', { class: 'pg-tv-status', role: 'status' });
     const results = h('div', { class: 'pg-disc-results' });
-    const go = h('button', { class: 'pg-play pg-tv-go' }, '✦ Descubrir');
+    const go = h('button', { class: 'pg-play pg-tv-go' }, T('✦ Descubrir'));
 
     // Añadir un canal sugerido a uno de tus grupos
     const addTo = async (f, g, card) => {
@@ -1767,14 +1780,14 @@
       if (!g.channels.includes(key)) g.channels.push(key);
       await PG.save({ channels: state.channels, groups: state.groups });
       card.classList.add('pg-disc-added');
-      card.querySelector('.pg-disc-add').textContent = `✓ En «${g.name}»`;
-      toast(`«${f.name}» añadido a «${g.name}»`);
+      card.querySelector('.pg-disc-add').textContent = T('✓ En «{0}»', g.name);
+      toast(T('«{0}» añadido a «{1}»', f.name, g.name));
     };
     const groupMenu = (btn, f, card) => {
       $('#pg-disc-gmenu')?.remove();
-      const m = h('div', { id: 'pg-disc-gmenu' }, h('div', { class: 'pg-vtitle' }, 'Añadir a…'),
+      const m = h('div', { id: 'pg-disc-gmenu' }, h('div', { class: 'pg-vtitle' }, T('Añadir a…')),
         ...state.groups.map(g => h('button', { class: 'pg-vitem', onclick: e => { e.stopPropagation(); m.remove(); addTo(f, g, card); } }, PG.iconEl(g, 20), h('span', {}, g.name))));
-      if (!state.groups.length) m.append(h('div', { class: 'pg-vloading' }, 'Aún no tienes grupos.'));
+      if (!state.groups.length) m.append(h('div', { class: 'pg-vloading' }, T('Aún no tienes grupos.')));
       const close = e => { if (!m.contains(e.target)) { m.remove(); document.removeEventListener('mousedown', close, true); } };
       document.addEventListener('mousedown', close, true);
       m.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); m.remove(); } });
@@ -1786,9 +1799,9 @@
     const cardFor = f => {
       const url = 'https://www.youtube.com/' + (f.handle || 'channel/' + f.id);
       const card = h('div', { class: 'pg-disc-card' });
-      const add = h('button', { class: 'pg-disc-add pg-play' }, '+ Añadir a grupo');
+      const add = h('button', { class: 'pg-disc-add pg-play' }, T('+ Añadir a grupo'));
       add.onclick = e => { e.stopPropagation(); if (!card.classList.contains('pg-disc-added')) groupMenu(add, f, card); };
-      const nope = h('button', { class: 'pg-disc-nope', title: 'No volver a sugerirlo' }, 'No me interesa');
+      const nope = h('button', { class: 'pg-disc-nope', title: T('No volver a sugerirlo') }, T('No me interesa'));
       nope.onclick = async () => {
         const ig = state.settings.discoverIgnored || (state.settings.discoverIgnored = []);
         if (!ig.includes(f.id)) ig.push(f.id);
@@ -1796,10 +1809,10 @@
         card.remove();
       };
       card.append(
-        h('a', { class: 'pg-disc-who', href: url, target: '_blank', rel: 'noopener', title: 'Abrir el canal en una pestaña nueva' },
+        h('a', { class: 'pg-disc-who', href: url, target: '_blank', rel: 'noopener', title: T('Abrir el canal en una pestaña nueva') },
           f.avatar ? h('img', { src: f.avatar, referrerpolicy: 'no-referrer' }) : h('span', { class: 'pg-tv-av' }),
           h('span', {}, h('b', {}, f.name || f.handle || f.id), h('small', {}, f.handle || ''))),
-        h('div', { class: 'pg-disc-why' }, `Parecido a ${f.sourceNames.slice(0, 3).join(', ')}${f.sourceNames.length > 3 ? ` y ${f.sourceNames.length - 3} más` : ''} · sale ${f.hits} ${f.hits === 1 ? 'vez' : 'veces'} en sus relacionados`),
+        h('div', { class: 'pg-disc-why' }, T('Parecido a {0}', f.sourceNames.slice(0, 3).join(', ') + (f.sourceNames.length > 3 ? T(' y {0} más', f.sourceNames.length - 3) : '')) + TN(f.hits, ' · sale {0} vez en sus relacionados', ' · sale {0} veces en sus relacionados')),
         h('ul', { class: 'pg-disc-vids' }, ...f.videos.slice(0, 2).map(v => h('li', {}, h('a', { href: 'https://www.youtube.com/watch?v=' + v.vid, target: '_blank', rel: 'noopener' }, v.title)))),
         h('div', { class: 'pg-disc-btns' }, add, nope));
       return card;
@@ -1814,15 +1827,15 @@
     };
     const setBusy = on => {
       box.classList.toggle('pg-busy', on); go.disabled = on;
-      if (on) go.replaceChildren(h('span', { class: 'pg-spin pg-spin-w', 'aria-hidden': 'true' }), 'Buscando…'); else go.textContent = '✦ Descubrir';
+      if (on) go.replaceChildren(h('span', { class: 'pg-spin pg-spin-w', 'aria-hidden': 'true' }), T('Buscando…')); else go.textContent = T('✦ Descubrir');
     };
     go.onclick = async () => {
       const c = { groups: [...groupsSel], channels: [...chansSel] };
       state.settings.discover = c; PG.save({ settings: state.settings });
-      status.className = 'pg-tv-status'; setBusy(true); progress('Preparando…'); results.replaceChildren();
+      status.className = 'pg-tv-status'; setBusy(true); progress(T('Preparando…')); results.replaceChildren();
       try {
         const r = await YTBoxDiscover.run(c, state, progress);
-        status.textContent = r.list.length ? `${r.list.length} canales sugeridos a partir de ${r.scanned} de tus canales. Vuelve a pulsar para otra tanda.` : 'No he encontrado canales nuevos esta vez. Prueba con otros canales o vuelve a intentarlo.';
+        status.textContent = r.list.length ? T('{0} canales sugeridos a partir de {1} de tus canales. Vuelve a pulsar para otra tanda.', r.list.length, r.scanned) : T('No he encontrado canales nuevos esta vez. Prueba con otros canales o vuelve a intentarlo.');
         results.append(...r.list.map(cardFor));
         results.scrollIntoView({ behavior: 'smooth', block: 'start' });
       } catch (e) { status.className += ' err'; status.textContent = e.message; }
@@ -1830,10 +1843,10 @@
     };
 
     box.append(
-      h('div', { class: 'pg-tv-head' }, h('span', { class: 'pg-tv-ico' }, PG.svgEl('brujula', 26, 'currentColor')), h('h2', {}, 'Descubrir'),
-        h('button', { class: 'pg-btn', title: 'Cerrar (Esc)', 'aria-label': 'Cerrar', onclick: () => root.remove() }, '✕')),
-      h('p', { class: 'pg-tv-intro' }, 'Elige tus canales y te sugiero canales parecidos que aún no tienes en YTBox: los que más aparecen en los vídeos relacionados de los tuyos.'),
-      h('section', {}, h('h3', {}, '¿A partir de qué canales?'), gchips, sel.box, details, count),
+      h('div', { class: 'pg-tv-head' }, h('span', { class: 'pg-tv-ico' }, PG.svgEl('brujula', 26, 'currentColor')), h('h2', {}, T('Descubrir')),
+        h('button', { class: 'pg-btn', title: T('Cerrar (Esc)'), 'aria-label': T('Cerrar'), onclick: () => root.remove() }, '✕')),
+      h('p', { class: 'pg-tv-intro' }, T('Elige tus canales y te sugiero canales parecidos que aún no tienes en YTBox: los que más aparecen en los vídeos relacionados de los tuyos.')),
+      h('section', {}, h('h3', {}, T('¿A partir de qué canales?')), gchips, sel.box, details, count),
       h('div', { class: 'pg-tv-foot' }, spin, status, go),
       bar,
       results);
@@ -1853,7 +1866,7 @@
   function picoNext(vid, video) {
     const order = tvSession.order || [];
     const next = order[order.indexOf(vid) + 1];
-    if (!next) { video.pause(); endPicoteo('🍿 Fin del picoteo'); return; }
+    if (!next) { video.pause(); endPicoteo(T('🍿 Fin del picoteo')); return; }
     const btn = $('#movie_player .ytp-next-button');
     if (btn && (btn.getAttribute('href') || '').includes(next)) btn.click();
     else {
@@ -1867,15 +1880,15 @@
       b?.remove();
       b = h('div', { id: 'pg-pico' },
         h('span', { class: 'pg-pico-txt' }),
-        h('button', { class: 'pg-pico-full', title: 'Ver este vídeo entero sin saltar', onclick: e => { e.stopPropagation(); picoFull.add(picoVid); } }, 'Ver entero'),
-        h('button', { title: 'Saltar al siguiente trozo', onclick: e => { e.stopPropagation(); picoAdvancing = true; picoNext(picoVid, $('#movie_player video')); } }, '⏭'),
-        h('button', { title: 'Salir del picoteo (seguir viendo normal)', onclick: e => { e.stopPropagation(); endPicoteo('Picoteo terminado'); } }, '✕'));
+        h('button', { class: 'pg-pico-full', title: T('Ver este vídeo entero sin saltar'), onclick: e => { e.stopPropagation(); picoFull.add(picoVid); } }, T('Ver entero')),
+        h('button', { title: T('Saltar al siguiente trozo'), onclick: e => { e.stopPropagation(); picoAdvancing = true; picoNext(picoVid, $('#movie_player video')); } }, '⏭'),
+        h('button', { title: T('Salir del picoteo (seguir viendo normal)'), onclick: e => { e.stopPropagation(); endPicoteo(T('Picoteo terminado')); } }, '✕'));
       ['mousedown', 'click', 'dblclick'].forEach(t => b.addEventListener(t, e => e.stopPropagation()));
       player.append(b);
     }
     const order = tvSession.order || [];
     const full = picoFull.has(vid);
-    b.querySelector('.pg-pico-txt').textContent = `🍿 Picoteo ${order.indexOf(vid) + 1}/${order.length} · ` + (full ? 'viendo entero' : `siguiente en ${clock(clip[1] - video.currentTime)}`);
+    b.querySelector('.pg-pico-txt').textContent = T('🍿 Picoteo {0}/{1} · ', order.indexOf(vid) + 1, order.length) + (full ? T('viendo entero') : T('siguiente en {0}', clock(clip[1] - video.currentTime)));
     b.querySelector('.pg-pico-full').style.display = full ? 'none' : '';
   }
   document.addEventListener('timeupdate', e => {
@@ -1965,15 +1978,15 @@
     const since = seen[g.id] || 0, m = marks[g.id] || {};
     const isNewV = v => v.vid in m ? m[v.vid] : (since > 0 && v.published.getTime() > since);
     const byId = new Map(Object.values(state.channels).filter(c => c.id).map(c => [c.id, c]));
-    const pick = h('button', { class: 'pg-home-pick', title: 'Cambiar de grupo', onclick: e => { e.stopPropagation(); homeGroupMenu(pick); } },
+    const pick = h('button', { class: 'pg-home-pick', title: T('Cambiar de grupo'), onclick: e => { e.stopPropagation(); homeGroupMenu(pick); } },
       PG.iconEl(g, 28), h('span', {}, g.name), h('span', { class: 'pg-home-caret' }, '▾'));
-    const playAll = h('button', { class: 'pg-home-btn', title: 'Ver los vídeos del grupo en una lista', onclick: () => {
-      const ids = home.items.slice(0, 50).map(v => v.vid); if (ids.length) location.href = '/watch_videos?video_ids=' + ids.join(','); } }, '▶ Reproducir todo');
-    const shuffle = h('button', { class: 'pg-home-btn pg-home-icon', title: 'Otro grupo al azar', 'aria-label': 'Otro grupo al azar', onclick: () => {
+    const playAll = h('button', { class: 'pg-home-btn', title: T('Ver los vídeos del grupo en una lista'), onclick: () => {
+      const ids = home.items.slice(0, 50).map(v => v.vid); if (ids.length) location.href = '/watch_videos?video_ids=' + ids.join(','); } }, T('▶ Reproducir todo'));
+    const shuffle = h('button', { class: 'pg-home-btn pg-home-icon', title: T('Otro grupo al azar'), 'aria-label': T('Otro grupo al azar'), onclick: () => {
       const list = homeGroups().filter(x => x.id !== home.groupId); if (!list.length) return;
       home.groupId = list[Math.floor(Math.random() * list.length)].id; loadHome(); } }, PG.svgEl('aleatorio', 18, 'currentColor'));
-    const open = h('button', { class: 'pg-home-btn', title: 'Abrir el grupo completo', onclick: () => openGroup(g.id) }, 'Abrir grupo');
-    const cfg = h('button', { class: 'pg-home-btn pg-home-icon', title: 'Ajustes (activar o quitar este estante)', 'aria-label': 'Ajustes del estante', onclick: () => openManager('settings') }, PG.svgEl('engranaje', 18, 'currentColor'));
+    const open = h('button', { class: 'pg-home-btn', title: T('Abrir el grupo completo'), onclick: () => openGroup(g.id) }, T('Abrir grupo'));
+    const cfg = h('button', { class: 'pg-home-btn pg-home-icon', title: T('Ajustes (activar o quitar este estante)'), 'aria-label': T('Ajustes del estante'), onclick: () => openManager('settings') }, PG.svgEl('engranaje', 18, 'currentColor'));
     const nav = (dir, label, disabled) => h('button', { class: 'pg-home-btn pg-home-icon pg-home-nav', title: label, 'aria-label': label, ...(disabled ? { disabled: '' } : {}),
       onclick: () => { home.page += dir; drawHome(); } }, PG.svgEl('chevron', 18, 'currentColor'));
     const prev = nav(-1, '3 anteriores', home.page === 0 || !home.items.length); prev.classList.add('pg-home-prev');
@@ -1985,23 +1998,23 @@
       return h('div', { class: 'pg-home-card' + (watched[v.vid] ? ' pg-home-watched' : '') },
         h('a', { class: 'pg-home-thumb', href: url },
           h('img', { src: `https://i.ytimg.com/vi/${v.vid}/mqdefault.jpg`, loading: 'lazy', alt: '' }),
-          isNewV(v) && !watched[v.vid] ? h('span', { class: 'pg-home-new' }, 'Nuevo') : null,
+          isNewV(v) && !watched[v.vid] ? h('span', { class: 'pg-home-new' }, T('Nuevo')) : null,
           watched[v.vid] ? h('span', { class: 'pg-home-seen' }, 'VISTO') : null,
           dur ? h('span', { class: 'pg-dur' }, dur) : null),
         h('div', { class: 'pg-home-meta' },
           c.avatar ? h('img', { class: 'pg-home-av', src: c.avatar, referrerpolicy: 'no-referrer', alt: '' }) : h('span', { class: 'pg-home-av' }),
           h('div', { style: 'min-width:0' },
             h('a', { class: 'pg-home-title', href: url, title: v.title }, v.title),
-            h('div', { class: 'pg-home-sub' }, h('a', { class: 'pg-chlink', href: '/' + (c.handle || 'channel/' + v.channelId), title: 'Ir al canal' }, v.author || c.name || '')),
+            h('div', { class: 'pg-home-sub' }, h('a', { class: 'pg-chlink', href: '/' + (c.handle || 'channel/' + v.channelId), title: T('Ir al canal') }, v.author || c.name || '')),
             h('div', { class: 'pg-home-sub' }, (v.views ? PG.fmtViews(v.views) + ' · ' : '') + PG.relTime(v.published)))));
     });
     while (cards.length < HOME_N && cards.length) cards.push(h('div', { class: 'pg-home-card pg-home-empty' }));
     el.replaceChildren(
       h('div', { class: 'pg-home-head' }, h('span', { class: 'pg-home-brand' }, 'YTBox'), pick, playAll, h('span', { class: 'pg-home-spacer' }),
-        home.items.length ? h('span', { class: 'pg-home-range' }, `${from + 1}–${Math.min(from + HOME_N, home.items.length)} de ${home.items.length}`) : null,
+        home.items.length ? h('span', { class: 'pg-home-range' }, T('{0}–{1} de {2}', from + 1, Math.min(from + HOME_N, home.items.length), home.items.length)) : null,
         prev, next, shuffle, open, cfg),
       !show.length ? h('div', { class: 'pg-home-loading' }, home.loading ? h('span', { class: 'pg-spin', style: 'display:inline-block' }) : null,
-        home.loading ? 'Cargando los vídeos de «' + g.name + '»…' : 'No hay vídeos recientes en este grupo.')
+        home.loading ? T('Cargando los vídeos de «') + g.name + '»…' : T('No hay vídeos recientes en este grupo.'))
         : h('div', { class: 'pg-home-grid' }, ...cards));
   }
   function homeGroupMenu(btn) {

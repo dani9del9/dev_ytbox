@@ -9,11 +9,9 @@ const PG = (() => {
 
   async function load() {
     const data = await chrome.storage.local.get(['groups', 'channels', 'settings']);
-    return {
-      groups: data.groups || [],
-      channels: data.channels || {},
-      settings: Object.assign({}, DEFAULT_STATE.settings, data.settings || {}),
-    };
+    const settings = Object.assign({}, DEFAULT_STATE.settings, data.settings || {});
+    if (typeof T === 'function') T.setLang(settings.lang);
+    return { groups: data.groups || [], channels: data.channels || {}, settings };
   }
   async function save(partial) { await chrome.storage.local.set(partial); }
 
@@ -46,11 +44,11 @@ const PG = (() => {
     if (parts[0] === 'channel' || parts[0] === 'c' || parts[0] === 'user') u.pathname = '/' + parts.slice(0, 2).join('/');
     else if (parts[0] && parts[0].startsWith('@')) u.pathname = '/' + parts[0];
     const res = await pageFetch(u.href, { credentials: 'include' });
-    if (res.url.includes('consent.')) throw new Error('YouTube pide aceptar o rechazar cookies: abre youtube.com, responde al aviso y vuelve a intentarlo');
-    if (!res.ok) throw new Error('No se encontró el canal (' + res.status + ') en ' + u.href);
+    if (res.url.includes('consent.')) throw new Error(T('YouTube pide aceptar o rechazar cookies: abre youtube.com, responde al aviso y vuelve a intentarlo'));
+    if (!res.ok) throw new Error(T('No se encontró el canal (') + res.status + ') en ' + u.href);
     const html = await res.text();
     const id = (html.match(/"externalId":"(UC[\w-]{22})"/) || html.match(/channel\/(UC[\w-]{22})"/) || [])[1];
-    if (!id) throw new Error('No se pudo leer el id del canal');
+    if (!id) throw new Error(T('No se pudo leer el id del canal'));
     const handleM = html.match(/"vanityChannelUrl":"https?:\/\/www\.youtube\.com\/(@[^"]+)"/) || html.match(/"canonicalBaseUrl":"\/(@[^"]+)"/);
     const handle = handleM ? decodeURIComponent(handleM[1]).toLowerCase() : null;
     const name = decodeEntities((html.match(/<meta property="og:title" content="([^"]*)"/) || [])[1] || handle || id);
@@ -139,19 +137,19 @@ const PG = (() => {
 
   function relTime(date) {
     const s = (Date.now() - date.getTime()) / 1000;
-    const f = (n, u, p) => `hace ${n} ${n === 1 ? u : p}`;
-    if (s < 3600) return f(Math.max(1, Math.floor(s / 60)), 'minuto', 'minutos');
-    if (s < 86400) return f(Math.floor(s / 3600), 'hora', 'horas');
-    if (s < 86400 * 30) return f(Math.floor(s / 86400), 'día', 'días');
-    if (s < 86400 * 365) return f(Math.floor(s / 86400 / 30), 'mes', 'meses');
-    return f(Math.floor(s / 86400 / 365), 'año', 'años');
+    if (s < 3600) return TN(Math.max(1, Math.floor(s / 60)), 'hace {0} minuto', 'hace {0} minutos');
+    if (s < 86400) return TN(Math.floor(s / 3600), 'hace {0} hora', 'hace {0} horas');
+    if (s < 86400 * 30) return TN(Math.floor(s / 86400), 'hace {0} día', 'hace {0} días');
+    if (s < 86400 * 365) return TN(Math.floor(s / 86400 / 30), 'hace {0} mes', 'hace {0} meses');
+    return TN(Math.floor(s / 86400 / 365), 'hace {0} año', 'hace {0} años');
   }
 
   function fmtViews(n) {
     n = Number(n) || 0;
-    if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace('.', ',') + ' M visualizaciones';
-    if (n >= 1e3) return Math.round(n / 1e3) + ' mil visualizaciones';
-    return n + ' visualizaciones';
+    const dec = x => x.toLocaleString(T.locale(), { maximumFractionDigits: 1 });
+    if (n >= 1e6) return T('{0} M visualizaciones', dec(n >= 1e7 ? Math.round(n / 1e6) : n / 1e6));
+    if (n >= 1e3) return T('{0} mil visualizaciones', Math.round(n / 1e3));
+    return T('{0} visualizaciones', n);
   }
 
   // ---------- Tema (claro / oscuro) y colores de la app ----------

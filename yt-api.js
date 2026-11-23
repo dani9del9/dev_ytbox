@@ -16,7 +16,7 @@ const YTAPI = (() => {
     const ts = Math.floor(Date.now() / 1000);
     const parts = [];
     const sapisid = cookie('SAPISID') || cookie('__Secure-3PAPISID');
-    if (!sapisid) throw new Error('Inicia sesión en YouTube para usar esta opción');
+    if (!sapisid) throw new Error(T('Inicia sesión en YouTube para usar esta opción'));
     parts.push(`SAPISIDHASH ${ts}_${await sha1Hex(`${ts} ${sapisid} ${origin}`)}`);
     const p1 = cookie('__Secure-1PAPISID');
     if (p1) parts.push(`SAPISID1PHASH ${ts}_${await sha1Hex(`${ts} ${p1} ${origin}`)}`);
@@ -59,7 +59,7 @@ const YTAPI = (() => {
       },
       body: JSON.stringify(Object.assign({ context: { client: { clientName: 'WEB', clientVersion: c.version, hl: c.hl, gl: c.gl } } }, body)),
     });
-    if (res.status === 401 || res.status === 403) throw new Error('YouTube no ha aceptado la sesión. Recarga la página e inténtalo de nuevo');
+    if (res.status === 401 || res.status === 403) throw new Error(T('YouTube no ha aceptado la sesión. Recarga la página e inténtalo de nuevo'));
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((json.error && json.error.message) || 'Error ' + res.status);
     return json;
@@ -67,7 +67,7 @@ const YTAPI = (() => {
 
   async function editPlaylist(playlistId, actions) {
     const r = await call('browse/edit_playlist', { playlistId, actions });
-    if (r.status && r.status !== 'STATUS_SUCCEEDED') throw new Error('YouTube respondió: ' + r.status);
+    if (r.status && r.status !== 'STATUS_SUCCEEDED') throw new Error(T('YouTube respondió: ') + r.status);
     return r;
   }
 
@@ -119,7 +119,7 @@ const YTAPI = (() => {
   async function createPlaylist(title, videoId) {
     const ids = Array.isArray(videoId) ? videoId : videoId ? [videoId] : [];
     const r = await call('playlist/create', { title, privacyStatus: 'PRIVATE', videoIds: ids });
-    if (!r.playlistId) throw new Error('No se pudo crear la lista');
+    if (!r.playlistId) throw new Error(T('No se pudo crear la lista'));
     return r.playlistId;
   }
 
@@ -148,11 +148,11 @@ const YTAPI = (() => {
       try {
         const res = await PG.fetch(url, { method: 'POST', credentials: creds, headers: { 'Content-Type': 'application/json', 'X-Youtube-Client-Name': '1', 'X-Youtube-Client-Version': c.version }, body });
         if (res.ok) return await res.json();
-        lastErr = new Error('YouTube respondió ' + res.status);
+        lastErr = new Error(T('YouTube respondió ') + res.status);
         if (res.status !== 403 && res.status !== 429 && res.status >= 400 && res.status < 500) break;
       } catch (e) { lastErr = e; }
     }
-    throw lastErr || new Error('Sin respuesta de YouTube');
+    throw lastErr || new Error(T('Sin respuesta de YouTube'));
   }
 
   // Últimos vídeos de un canal por su RSS (respaldo: sin duraciones)

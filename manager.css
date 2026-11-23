@@ -308,3 +308,15 @@ h3{margin:40px 0 16px}
 .set-check input{width:18px;height:18px;margin-top:2px;accent-color:var(--acc);flex:0 0 18px}
 .set-check span{display:flex;flex-direction:column;gap:4px}
 .set-check small{color:var(--mut);font-size:13px;line-height:1.5}
+
+/* Ajustes: botón de donación */
+.kofi-btn{display:inline-flex;align-items:center;gap:8px;text-decoration:none;padding:9px 18px}
+
+/* Ajustes en dos columnas: tarjeta de apoyo en el hueco de la derecha */
+.set-layout{display:flex;gap:28px;align-items:flex-start}
+.set-col{flex:0 1 760px;min-width:0}
+.set-aside{flex:0 0 300px;position:sticky;top:24px}
+.set-aside .card{max-width:none;text-align:center}
+.set-aside .kofi-ico{font-size:44px;line-height:1;margin-bottom:6px}
+.set-aside .kofi-btn{justify-content:center;width:100%;box-sizing:border-box}
+@media (max-width:1200px){.set-layout{flex-direction:column;gap:0}.set-aside{position:static;flex:none;width:100%;max-width:760px}.set-aside .card{text-align:left}.set-aside .kofi-btn{width:auto}.set-aside .kofi-ico{display:none}}

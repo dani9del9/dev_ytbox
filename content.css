@@ -503,3 +503,17 @@ yt-flexible-actions-view-model .pg-chbtn{margin-left:8px;margin-top:0}
 .pg-avatar.pg-to-channel:hover{box-shadow:0 0 0 2px var(--pg-acc)}
 
 .pg-home-brand{font:800 20px Roboto,Arial,sans-serif;background:var(--pg-grad);-webkit-background-clip:text;background-clip:text;color:transparent;margin-right:2px}
+
+/* Estante de portada: cabecera con el degradado de la app y textos en blanco */
+#pg-home .pg-home-head{background:var(--pg-grad);color:#fff;border-radius:14px;padding:8px 10px 8px 16px}
+#pg-home .pg-home-brand{background:none;-webkit-background-clip:border-box;background-clip:border-box;color:#fff;-webkit-text-fill-color:#fff}
+#pg-home .pg-home-head .pg-home-pick,#pg-home .pg-home-head .pg-home-range{color:#fff}
+#pg-home .pg-home-head .pg-home-pick:hover{background:rgba(255,255,255,.18)}
+#pg-home .pg-home-head .pg-home-btn{background:rgba(255,255,255,.2);color:#fff}
+#pg-home .pg-home-head .pg-home-btn:hover:not(:disabled){background:rgba(255,255,255,.32)}
+#pg-home .pg-home-head .pg-home-btn:disabled{opacity:.45}
+#pg-home .pg-home-head .pg-ico,#pg-home .pg-home-head .pg-home-pick > :first-child{box-shadow:0 0 0 2px rgba(255,255,255,.55);border-radius:8px}
+
+/* Con una vista de YTBox abierta, la barra superior de YouTube va opaca (si no, a veces se transparentan miniaturas detrás) */
+html:has(#pg-overlay) #masthead-container,html:has(#pg-overlay) ytd-masthead,html:has(#pg-overlay) ytd-masthead #container{background:var(--yt-spec-base-background,#fff) !important;background-image:none !important;backdrop-filter:none !important}
+html:has(#pg-overlay) ytd-masthead #background,html:has(#pg-overlay) #masthead-container #frosted-glass{opacity:1 !important;background:var(--yt-spec-base-background,#fff) !important}
