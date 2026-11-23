@@ -84,16 +84,62 @@
     if (mode === 'az') list.sort(byName);
     else if (mode === 'za') list.sort((a, b) => byName(b, a));
     else list.sort((a, b) => ((newCounts[b.g.id] || 0) - (newCounts[a.g.id] || 0)) || (a.i - b.i));
-    return list.map(x => x.g);
+    // Los grupos fijados van siempre arriba (en el mismo orden entre ellos)
+    return list.filter(x => x.g.pinned).concat(list.filter(x => !x.g.pinned)).map(x => x.g);
   }
 
-  function groupRows(container, size) {
+  function groupRows(container, size, withMenu) {
     for (const g of sortedGroups()) {
-      const n = newCounts[g.id] || 0;
-      container.append(h('a', { class: 'pg-guide-item', href: '#', title: n ? `${g.name} · ${n} vídeo${n > 1 ? 's' : ''} nuevo${n > 1 ? 's' : ''}` : g.name, onclick: e => { e.preventDefault(); $('#pg-launch-menu')?.remove(); openGroup(g.id); } },
+      const n = g.muted ? 0 : (newCounts[g.id] || 0);
+      const more = withMenu ? h('button', { class: 'pg-gmenu-btn', title: 'Opciones del grupo', 'aria-label': 'Opciones de ' + g.name,
+        onclick: e => { e.preventDefault(); e.stopPropagation(); openGroupItemMenu(e.currentTarget, g); } }, '⋮') : null;
+      container.append(h('a', { class: 'pg-guide-item' + (g.muted ? ' pg-muted' : '') + (withMenu ? ' pg-has-menu' : ''), href: '#',
+        title: (g.pinned ? '📌 ' : '') + g.name + (g.muted ? ' · silenciado' : n ? ` · ${n} vídeo${n > 1 ? 's' : ''} nuevo${n > 1 ? 's' : ''}` : ''),
+        onclick: e => { e.preventDefault(); $('#pg-launch-menu')?.remove(); openGroup(g.id); } },
         PG.iconEl(g, size), h('span', { class: 'pg-guide-name' + (n ? ' pg-has-new' : '') }, g.name),
-        n ? h('span', { class: 'pg-guide-new' }, n > 99 ? '99+' : String(n)) : null));
+        g.pinned ? h('span', { class: 'pg-gflag', title: 'Fijado arriba' }, PG.svgEl('chincheta', 14, 'currentColor')) : null,
+        g.muted ? h('span', { class: 'pg-gflag', title: 'Silenciado: no muestra novedades' }, PG.svgEl('silencio', 14, 'currentColor')) : null,
+        n ? h('span', { class: 'pg-guide-new' }, n > 99 ? '99+' : String(n)) : null,
+        more));
     }
+  }
+
+  // Menú ⋮ de cada grupo en la barra lateral
+  async function markGroupSeen(g) {
+    const { seen = {}, marks = {} } = await chrome.storage.local.get(['seen', 'marks']);
+    seen[g.id] = Date.now();
+    const m = marks[g.id]; if (m) for (const k of Object.keys(m)) if (m[k] === true) delete m[k];
+    newCounts[g.id] = 0;
+    await chrome.storage.local.set({ seen, marks });
+    renderGuide(true); saveCountsCache(); quickRecount().catch(() => {});
+    toast(`«${g.name}» marcado como leído`);
+  }
+  function openGroupItemMenu(btn, g) {
+    const old = $('#pg-menu');
+    if (old) { old.remove(); if (old.dataset.kind === 'g-' + g.id) return; }
+    const setFlag = async (key, val, msg) => {
+      menu.remove();
+      const gg = state.groups.find(x => x.id === g.id); if (!gg) return;
+      if (val) gg[key] = true; else delete gg[key];
+      await PG.save({ groups: state.groups });
+      quickRecount().catch(() => {});
+      toast(msg);
+    };
+    const item = (icon, label, fn) => h('button', { class: 'pg-vitem', onclick: fn }, h('span', { class: 'pg-vicon' }, PG.svgEl(icon, 18, 'currentColor')), h('span', {}, label));
+    const menu = h('div', { id: 'pg-menu', 'data-kind': 'g-' + g.id },
+      h('div', { class: 'pg-vlabel' }, g.name),
+      item('check', 'Marcar como leído', async () => { menu.remove(); await markGroupSeen(g); }),
+      item('chincheta', g.pinned ? 'Quitar de arriba' : 'Fijar arriba', () => setFlag('pinned', !g.pinned, g.pinned ? `«${g.name}» ya no está fijado` : `«${g.name}» fijado arriba`)),
+      item(g.muted ? 'campana' : 'silencio', g.muted ? 'Activar novedades' : 'Silenciar', () => setFlag('muted', !g.muted, g.muted ? `«${g.name}» vuelve a mostrar novedades` : `«${g.name}» silenciado: no mostrará novedades hasta que lo actives`)),
+      h('div', { class: 'pg-vsep' }),
+      item('lapiz', 'Editar', () => { menu.remove(); openManager('group=' + g.id); }));
+    document.body.append(menu);
+    const r = btn.getBoundingClientRect();
+    menu.style.top = Math.min(window.innerHeight - menu.offsetHeight - 8, r.bottom + 4) + 'px';
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - menu.offsetWidth - 8, r.right - menu.offsetWidth)) + 'px';
+    setTimeout(() => document.addEventListener('mousedown', function close(e) {
+      if (!menu.contains(e.target) && e.target !== btn) { menu.remove(); document.removeEventListener('mousedown', close); }
+    }), 0);
   }
 
   // Menú ⋮ de la cabecera de la barra lateral
@@ -172,7 +218,7 @@
     const allNew = new Set();
     for (const g of state.groups) {
       const since = seen[g.id];
-      if (!since) { newCounts[g.id] = 0; continue; }
+      if (!since || g.muted) { newCounts[g.id] = 0; continue; } // silenciado: sin novedades
       const m = marks[g.id] || {};
       let n = 0;
       for (const k of g.channels) {
@@ -278,8 +324,8 @@
   }
 
   function tvPresetRows(close) {
-    return YTBoxTV.presets(state).map(p => h('a', { class: 'pg-guide-item pg-tv-preset-row', href: '#', title: 'Ver ya: ' + YTBoxTV.summary(p.cfg, state),
-      onclick: e => { e.preventDefault(); close && close(); openTV(p.id, true); } },
+    return YTBoxTV.presets(state).map(p => h('a', { class: 'pg-guide-item pg-tv-preset-row', href: '#', title: 'Preparar la lista: ' + YTBoxTV.summary(p.cfg, state),
+      onclick: e => { e.preventDefault(); close && close(); openTV(p.id, 'preview'); } },
       h('span', { class: 'pg-tv-preset-dot' }, '▶'), h('span', { class: 'pg-guide-name' }, p.name)));
   }
 
@@ -354,7 +400,7 @@
     if (!state.groups.length) {
       box.append(h('div', { class: 'pg-guide-empty' }, 'Aún no tienes grupos. ', h('a', { href: '#', onclick: e => { e.preventDefault(); openManager('new'); } }, 'Crear uno')));
     }
-    groupRows(box, 24);
+    groupRows(box, 24, true);
   }
 
   // ---------- Botón flotante "Añadir a grupo" ----------
@@ -521,8 +567,9 @@
     if (anchor) {
       const ar = anchor.getBoundingClientRect(), mh = menu.offsetHeight;
       const below = window.innerHeight - ar.bottom - 12, above = ar.top - 12;
-      if (mh > below && above > below) { menu.style.top = Math.max(8, ar.top - 6 - Math.min(mh, above)) + 'px'; menu.style.maxHeight = above + 'px'; }
-      else { menu.style.top = (ar.bottom + 6) + 'px'; menu.style.maxHeight = below + 'px'; }
+      const cap = Math.round(window.innerHeight * 0.6); // nunca más del 60 % de la pantalla: con muchos grupos, scroll propio
+      if (mh > below && above > below) { const hh = Math.min(above, cap); menu.style.top = Math.max(8, ar.top - 6 - Math.min(mh, hh)) + 'px'; menu.style.maxHeight = hh + 'px'; }
+      else { menu.style.top = (ar.bottom + 6) + 'px'; menu.style.maxHeight = Math.min(below, cap) + 'px'; }
     }
     setTimeout(() => document.addEventListener('mousedown', function close(e) {
       if (!menu.contains(e.target) && !host.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', close); }
@@ -683,7 +730,7 @@
   // «Nuevos vídeos»: página que junta los nuevos de todos los grupos. No cambia las marcas de los grupos.
   const NEW_ID = '__new';
   const newPageGroup = () => {
-    const keys = new Set(); state.groups.forEach(gr => gr.channels.forEach(k => keys.add(k)));
+    const keys = new Set(); state.groups.filter(gr => !gr.muted).forEach(gr => gr.channels.forEach(k => keys.add(k)));
     return { id: NEW_ID, name: 'Nuevos vídeos', icon: { type: 'svg', value: 'nuevos', bg: true }, color: state.settings.color1 || '#ff6347', channels: [...keys] };
   };
   async function openGroup(groupId, since) {
@@ -814,7 +861,7 @@
     let queue = stored.queue || [];
     // En «Nuevos vídeos», un vídeo es nuevo si lo es en alguno de los grupos de su canal (y no lo has visto)
     const groupsByChannel = new Map();
-    if (virt) for (const gr of state.groups) for (const k of gr.channels) { const c = state.channels[k]; if (c && c.id) { if (!groupsByChannel.has(c.id)) groupsByChannel.set(c.id, []); groupsByChannel.get(c.id).push(gr.id); } }
+    if (virt) for (const gr of state.groups.filter(x => !x.muted)) for (const k of gr.channels) { const c = state.channels[k]; if (c && c.id) { if (!groupsByChannel.has(c.id)) groupsByChannel.set(c.id, []); groupsByChannel.get(c.id).push(gr.id); } }
     const newIn = (gid, v) => { const m = marksAll[gid] || {}; const s = seenAll[gid] || 0; return v.vid in m ? m[v.vid] : (s > 0 && v.published.getTime() > s); };
     const isNew = virt
       ? v => !watched[v.vid] && (groupsByChannel.get(v.channelId) || []).some(gid => newIn(gid, v))
@@ -1138,6 +1185,14 @@
       check.querySelector('input').checked = sel.index >= 0;
     }
     const seenIt = ctx && ctx.isWatched(v);
+    // Pulsar el nombre o el avatar del canal lleva al canal (no reproduce el vídeo). Ctrl/clic central: pestaña nueva
+    const chUrl = 'https://www.youtube.com/' + (ch && ch.handle ? ch.handle : 'channel/' + (v.channelId || (ch && ch.id) || ''));
+    const goChannel = e => {
+      if (sel) return; // en «Seleccionar», el clic marca el vídeo
+      e.preventDefault(); e.stopPropagation();
+      if (e.ctrlKey || e.metaKey || e.button === 1) { window.open(chUrl, '_blank'); return; }
+      closeOverlay(); location.href = chUrl;
+    };
     const a = h('a', { class: 'pg-card' + (fresh ? ' pg-new' : '') + (sel && sel.index >= 0 ? ' pg-checked' : '') + (seenIt ? ' pg-watched' : ''), href, 'data-vid': v.vid },
       h('div', { class: 'pg-thumb' }, h('img', { src: `https://i.ytimg.com/vi/${v.vid}/mqdefault.jpg`, loading: 'lazy' }),
         fresh ? h('span', { class: 'pg-new-badge' }, 'Nuevo') : null,
@@ -1147,10 +1202,11 @@
         check,
         v.short ? h('span', { class: 'pg-badge' }, 'SHORT') : (v.vid in durations ? h('span', { class: 'pg-dur' }, fmtDuration(durations[v.vid])) : null)),
       h('div', { class: 'pg-meta' },
-        ch && ch.avatar ? h('img', { class: 'pg-avatar', src: ch.avatar, referrerpolicy: 'no-referrer' }) : h('span', { class: 'pg-avatar' }),
+        ch && ch.avatar ? h('img', { class: 'pg-avatar pg-to-channel', src: ch.avatar, referrerpolicy: 'no-referrer', title: 'Ir al canal', onclick: goChannel }) : h('span', { class: 'pg-avatar' }),
         h('div', {},
           h('div', { class: 'pg-title', title: v.title }, v.title),
-          h('div', { class: 'pg-sub' }, v.author),
+          h('div', { class: 'pg-sub' }, h('span', { class: 'pg-chlink', role: 'link', tabindex: '0', title: 'Ir al canal ' + (v.author || ''), onclick: goChannel,
+            onauxclick: goChannel, onkeydown: e => { if (e.key === 'Enter') goChannel(e); } }, v.author)),
           h('div', { class: 'pg-sub' }, (v.views ? PG.fmtViews(v.views) + ' · ' : '') + PG.relTime(v.published)),
           ctx && ctx.groupsOf ? h('div', { class: 'pg-card-groups' }, ...ctx.groupsOf(v).map(g => h('button', { class: 'pg-card-group', title: 'Abrir el grupo «' + g.name + '»',
             onclick: e => { e.preventDefault(); e.stopPropagation(); openGroup(g.id); } }, PG.iconEl(g, 14), g.name))) : null,
@@ -1432,7 +1488,14 @@
 
     // Grupos
     const gchips = h('div', { class: 'pg-tv-chips' });
-    const drawGroups = () => gchips.replaceChildren(...state.groups.map(g => h('button', { class: 'pg-chip' + (groupsSel.has(g.id) ? ' on' : ''), onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); } }, PG.iconEl(g, 20), g.name)));
+    const drawGroups = () => {
+      const allOn = state.groups.length > 0 && state.groups.every(g => groupsSel.has(g.id));
+      gchips.replaceChildren(
+        ...(state.groups.length > 1 ? [h('button', { class: 'pg-chip pg-chip-all', title: allOn ? 'Quitar todos los grupos' : 'Elegir todos los grupos',
+          onclick: () => { if (allOn) groupsSel.clear(); else state.groups.forEach(g => groupsSel.add(g.id)); drawGroups(); updateCount(); } },
+          PG.svgEl('check', 16, 'currentColor'), allOn ? 'Desmarcar todos' : 'Marcar todos')] : []),
+        ...state.groups.map(g => h('button', { class: 'pg-chip' + (groupsSel.has(g.id) ? ' on' : ''), onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); } }, PG.iconEl(g, 20), g.name)));
+    };
     drawGroups();
     // Canales sueltos
     const q = h('input', { type: 'search', class: 'pg-search', placeholder: 'Buscar canal…', style: 'width:100%;box-sizing:border-box' });
@@ -1510,7 +1573,7 @@
           PG.save({ settings: state.settings }); drawPresets();
         };
         return h('div', { class: 'pg-tv-preset' + (p.id === activeId ? ' on' : '') },
-          h('button', { class: 'pg-tv-preset-load', title: 'Cargar esta configuración', onclick: () => loadPreset(p) }, h('b', {}, p.name), h('small', {}, YTBoxTV.summary(p.cfg, state))),
+          h('button', { class: 'pg-tv-preset-load', title: `Cargar «${p.name}»\n${YTBoxTV.summary(p.cfg, state)}`, onclick: () => loadPreset(p) }, p.name),
           h('button', { class: 'pg-tv-preset-play', title: 'Ver ya', 'aria-label': 'Ver ' + p.name, onclick: () => { loadPreset(p); go.click(); } }, '▶'), del);
       }) : [h('span', { class: 'pg-tv-count' }, 'Aún no tienes ninguna. Configura abajo y guárdala con un nombre.')]));
     };
@@ -1628,7 +1691,8 @@
     document.body.append(root);
     const pre = presetId && YTBoxTV.presets(state).find(x => x.id === presetId);
     if (pre) loadPreset(pre);
-    setTimeout(() => { go.focus(); if (pre && autoplay) go.click(); }, 0);
+    // Desde la barra lateral: carga la preconfiguración y deja la lista preparada (no reproduce hasta pulsar VER)
+    setTimeout(() => { go.focus(); if (pre && autoplay === 'preview') makePreview(); else if (pre && autoplay) go.click(); }, 0);
   }
 
   // Chips con los canales sueltos elegidos (× para quitar uno, «Quitar todos») — Modo TV y Descubrir
@@ -1666,7 +1730,14 @@
     const selected = () => YTBoxTV.selectedChannels({ groups: [...groupsSel], channels: [...chansSel] }, state);
     const updateCount = () => { const n = selected().length; count.textContent = n ? `${n} canal${n > 1 ? 'es' : ''} seleccionado${n > 1 ? 's' : ''}` + (n > 12 ? ' · se mirarán 12 al azar cada vez' : '') : 'Ningún canal seleccionado'; };
     const gchips = h('div', { class: 'pg-tv-chips' });
-    const drawGroups = () => gchips.replaceChildren(...state.groups.map(g => h('button', { class: 'pg-chip' + (groupsSel.has(g.id) ? ' on' : ''), onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); } }, PG.iconEl(g, 20), g.name)));
+    const drawGroups = () => {
+      const allOn = state.groups.length > 0 && state.groups.every(g => groupsSel.has(g.id));
+      gchips.replaceChildren(
+        ...(state.groups.length > 1 ? [h('button', { class: 'pg-chip pg-chip-all', title: allOn ? 'Quitar todos los grupos' : 'Elegir todos los grupos',
+          onclick: () => { if (allOn) groupsSel.clear(); else state.groups.forEach(g => groupsSel.add(g.id)); drawGroups(); updateCount(); } },
+          PG.svgEl('check', 16, 'currentColor'), allOn ? 'Desmarcar todos' : 'Marcar todos')] : []),
+        ...state.groups.map(g => h('button', { class: 'pg-chip' + (groupsSel.has(g.id) ? ' on' : ''), onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); } }, PG.iconEl(g, 20), g.name)));
+    };
     drawGroups();
     const q = h('input', { type: 'search', class: 'pg-search', placeholder: 'Buscar canal…', style: 'width:100%;box-sizing:border-box' });
     const clist = h('div', { class: 'pg-tv-clist' });
@@ -1823,9 +1894,143 @@
     if (!picoAdvancing && !picoFull.has(vid) && video.currentTime >= clip[1] - 0.3) { picoAdvancing = true; picoNext(vid, video); }
   }, true);
 
+  // ---------- Estante de YTBox en la portada de YouTube ----------
+  // Cada vez que entras en la portada sale un grupo al azar (se cambia con ▾ o el botón aleatorio).
+  // Muestra siempre 3 vídeos (los más recientes del grupo) y ‹ › pasan de 3 en 3.
+  // Va entre las recomendaciones de YouTube, después de sus dos primeras filas.
+  const HOME_N = 3;
+  const home = { groupId: null, wasHome: false, page: 0, loading: false, items: [], token: 0 };
+  const homeEnabled = () => state.settings.homeShelf !== false;
+  const homeGroups = () => state.groups.filter(g => !g.muted && g.channels.length);
+  function homeAnchor() {
+    const grid = $('ytd-browse[page-subtype="home"] ytd-rich-grid-renderer');
+    const contents = grid && grid.querySelector(':scope > #contents');
+    if (!contents) return null;
+    const perRow = parseInt(getComputedStyle(grid).getPropertyValue('--ytd-rich-grid-items-per-row')) || 3;
+    const rows = contents.querySelectorAll(':scope > ytd-rich-grid-row');
+    if (rows.length) return rows.length >= 2 ? { parent: contents, after: rows[1] } : null; // diseño antiguo, por filas
+    const items = contents.querySelectorAll(':scope > ytd-rich-item-renderer');
+    const target = items[perRow * 2 - 1];
+    return target ? { parent: contents, after: target } : null;
+  }
+  function decorateHome() {
+    const onHome = location.pathname === '/';
+    let el = $('#pg-home');
+    if (!onHome || !homeEnabled() || !homeGroups().length) { el && el.remove(); home.wasHome = onHome; return; }
+    const spot = homeAnchor();
+    if (!spot) return; // aún no ha cargado la portada
+    const entering = !home.wasHome;
+    home.wasHome = true;
+    if (entering || !home.groupId || !state.groups.some(g => g.id === home.groupId && !g.muted)) {
+      const list = homeGroups();
+      home.groupId = list[Math.floor(Math.random() * list.length)].id;
+      home.page = 0; home.items = [];
+    }
+    const fresh = !el || !el.isConnected;
+    if (fresh) { el = h('div', { id: 'pg-home' }); }
+    if (fresh || el.parentElement !== spot.parent) spot.after.after(el);
+    if (fresh) { if (home.items.length && !entering) drawHome(); else loadHome(); }
+    else if (entering) loadHome();
+  }
+  async function loadHome() {
+    const g = state.groups.find(x => x.id === home.groupId);
+    if (!g) return;
+    const token = ++home.token;
+    home.loading = true; home.items = []; home.page = 0; drawHome();
+    const chans = g.channels.map(k => state.channels[k]).filter(c => c && c.id);
+    let all = [];
+    await pool(chans, 6, async c => {
+      const items = await fetchRss(c.id);
+      if (token !== home.token) return;
+      all = all.concat(items.filter(v => !v.short));
+      home.items = all.slice().sort((a, b) => b.published - a.published).slice(0, 60);
+      drawHome();
+      ensureDurations(c.id, items).then(ch => { if (ch && token === home.token) drawHome(); }).catch(() => {});
+    });
+    if (token !== home.token) return;
+    home.loading = false; drawHome();
+  }
+  let homeDrawT = null;
+  function drawHome() { clearTimeout(homeDrawT); homeDrawT = setTimeout(drawHomeNow, 60); }
+  async function drawHomeNow() {
+    const el = $('#pg-home');
+    if (!el) return;
+    const g = state.groups.find(x => x.id === home.groupId);
+    if (!g) { el.remove(); return; }
+    const pages = Math.max(1, Math.ceil(home.items.length / HOME_N));
+    home.page = Math.min(home.page, pages - 1);
+    const from = Math.max(0, Math.min(home.page * HOME_N, home.items.length - HOME_N)); // la última página también muestra 3
+    const show = home.items.slice(from, from + HOME_N);
+    const { seen = {}, marks = {}, watched = {} } = await chrome.storage.local.get(['seen', 'marks', 'watched']);
+    const since = seen[g.id] || 0, m = marks[g.id] || {};
+    const isNewV = v => v.vid in m ? m[v.vid] : (since > 0 && v.published.getTime() > since);
+    const byId = new Map(Object.values(state.channels).filter(c => c.id).map(c => [c.id, c]));
+    const pick = h('button', { class: 'pg-home-pick', title: 'Cambiar de grupo', onclick: e => { e.stopPropagation(); homeGroupMenu(pick); } },
+      PG.iconEl(g, 28), h('span', {}, g.name), h('span', { class: 'pg-home-caret' }, '▾'));
+    const playAll = h('button', { class: 'pg-home-btn', title: 'Ver los vídeos del grupo en una lista', onclick: () => {
+      const ids = home.items.slice(0, 50).map(v => v.vid); if (ids.length) location.href = '/watch_videos?video_ids=' + ids.join(','); } }, '▶ Reproducir todo');
+    const shuffle = h('button', { class: 'pg-home-btn pg-home-icon', title: 'Otro grupo al azar', 'aria-label': 'Otro grupo al azar', onclick: () => {
+      const list = homeGroups().filter(x => x.id !== home.groupId); if (!list.length) return;
+      home.groupId = list[Math.floor(Math.random() * list.length)].id; loadHome(); } }, PG.svgEl('aleatorio', 18, 'currentColor'));
+    const open = h('button', { class: 'pg-home-btn', title: 'Abrir el grupo completo', onclick: () => openGroup(g.id) }, 'Abrir grupo');
+    const cfg = h('button', { class: 'pg-home-btn pg-home-icon', title: 'Ajustes (activar o quitar este estante)', 'aria-label': 'Ajustes del estante', onclick: () => openManager('settings') }, PG.svgEl('engranaje', 18, 'currentColor'));
+    const nav = (dir, label, disabled) => h('button', { class: 'pg-home-btn pg-home-icon pg-home-nav', title: label, 'aria-label': label, ...(disabled ? { disabled: '' } : {}),
+      onclick: () => { home.page += dir; drawHome(); } }, PG.svgEl('chevron', 18, 'currentColor'));
+    const prev = nav(-1, '3 anteriores', home.page === 0 || !home.items.length); prev.classList.add('pg-home-prev');
+    const next = nav(1, '3 siguientes', home.page >= pages - 1 || !home.items.length);
+    const cards = show.map(v => {
+      const c = byId.get(v.channelId) || {};
+      const url = '/watch?v=' + v.vid;
+      const dur = v.vid in durations ? fmtDuration(durations[v.vid]) : null;
+      return h('div', { class: 'pg-home-card' + (watched[v.vid] ? ' pg-home-watched' : '') },
+        h('a', { class: 'pg-home-thumb', href: url },
+          h('img', { src: `https://i.ytimg.com/vi/${v.vid}/mqdefault.jpg`, loading: 'lazy', alt: '' }),
+          isNewV(v) && !watched[v.vid] ? h('span', { class: 'pg-home-new' }, 'Nuevo') : null,
+          watched[v.vid] ? h('span', { class: 'pg-home-seen' }, 'VISTO') : null,
+          dur ? h('span', { class: 'pg-dur' }, dur) : null),
+        h('div', { class: 'pg-home-meta' },
+          c.avatar ? h('img', { class: 'pg-home-av', src: c.avatar, referrerpolicy: 'no-referrer', alt: '' }) : h('span', { class: 'pg-home-av' }),
+          h('div', { style: 'min-width:0' },
+            h('a', { class: 'pg-home-title', href: url, title: v.title }, v.title),
+            h('div', { class: 'pg-home-sub' }, h('a', { class: 'pg-chlink', href: '/' + (c.handle || 'channel/' + v.channelId), title: 'Ir al canal' }, v.author || c.name || '')),
+            h('div', { class: 'pg-home-sub' }, (v.views ? PG.fmtViews(v.views) + ' · ' : '') + PG.relTime(v.published)))));
+    });
+    while (cards.length < HOME_N && cards.length) cards.push(h('div', { class: 'pg-home-card pg-home-empty' }));
+    el.replaceChildren(
+      h('div', { class: 'pg-home-head' }, h('span', { class: 'pg-home-brand' }, 'YTBox'), pick, playAll, h('span', { class: 'pg-home-spacer' }),
+        home.items.length ? h('span', { class: 'pg-home-range' }, `${from + 1}–${Math.min(from + HOME_N, home.items.length)} de ${home.items.length}`) : null,
+        prev, next, shuffle, open, cfg),
+      !show.length ? h('div', { class: 'pg-home-loading' }, home.loading ? h('span', { class: 'pg-spin', style: 'display:inline-block' }) : null,
+        home.loading ? 'Cargando los vídeos de «' + g.name + '»…' : 'No hay vídeos recientes en este grupo.')
+        : h('div', { class: 'pg-home-grid' }, ...cards));
+  }
+  function homeGroupMenu(btn) {
+    const old = $('#pg-menu');
+    if (old) { old.remove(); if (old.dataset.kind === 'home') return; }
+    const menu = h('div', { id: 'pg-menu', 'data-kind': 'home' },
+      ...homeGroups().map(g => h('button', { class: 'pg-vitem' + (g.id === home.groupId ? ' on' : ''), onclick: () => {
+        menu.remove(); if (g.id === home.groupId) return; home.groupId = g.id; home.expanded = false; loadHome(); } },
+        PG.iconEl(g, 22), h('span', {}, g.name), newCounts[g.id] ? h('span', { class: 'pg-guide-new', style: 'margin-left:auto' }, String(newCounts[g.id])) : null)));
+    document.body.append(menu);
+    const r = btn.getBoundingClientRect();
+    menu.style.maxHeight = Math.max(200, window.innerHeight - r.bottom - 20) + 'px'; menu.style.overflow = 'auto';
+    menu.style.top = (r.bottom + 6) + 'px'; menu.style.left = Math.max(8, r.left) + 'px';
+    setTimeout(() => document.addEventListener('mousedown', function close(e) {
+      if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', close); }
+    }), 0);
+  }
+
+  // Con el ratón encima de un menú de YTBox, la rueda solo mueve el menú (nunca la página de detrás)
+  document.addEventListener('wheel', e => {
+    const m = e.target instanceof Element && e.target.closest('#pg-menu, #pg-launch-menu, #pg-vmenu, #pg-disc-gmenu');
+    if (!m) return;
+    e.preventDefault(); e.stopPropagation();
+    m.scrollTop += e.deltaMode === 1 ? e.deltaY * 18 : e.deltaY;
+  }, { passive: false, capture: true });
+
   // ---------- Ciclo ----------
   function safe(fn, ...a) { try { fn(...a); } catch (e) { console.error('[YTBox]', e); } }
-  function tick() { renderGuide(false); safe(updateFab); safe(decorateChannelList, false); safe(positionOverlay); safe(decorateFeed); recordWatched().catch(() => {}); recordChannelView().catch(() => {}); }
+  function tick() { renderGuide(false); safe(updateFab); safe(decorateChannelList, false); safe(positionOverlay); safe(decorateFeed); safe(decorateHome); recordWatched().catch(() => {}); recordChannelView().catch(() => {}); }
   document.addEventListener('yt-navigate-finish', () => { $('#pg-menu')?.remove(); setTimeout(tick, 300); setTimeout(tick, 1500); });
   chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     if (msg.type === 'openGroup') openGroup(msg.id);

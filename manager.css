@@ -292,3 +292,19 @@ h3{margin:40px 0 16px}
 #main[data-view="help"] .help-sec{max-width:none}
 #main[data-view="discover"] .disc-results{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
 #main[data-view="calendar"] .cal-cell{min-height:96px}
+
+.tv-chip.chip-all{background:transparent;border:1px dashed color-mix(in srgb,var(--acc) 60%,var(--line));color:var(--acc);gap:6px}
+.tv-chip.chip-all:hover{background:var(--acc-soft)}
+
+/* Preconfiguraciones compactas */
+.tv-presets{gap:8px}
+.tv-preset{align-items:center;height:34px;border-radius:17px;padding:0 4px 0 0}
+.tv-preset .tv-preset-load{display:block;height:34px;padding:0 10px 0 16px;font-weight:500;font-size:14px;white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis;border-radius:17px 0 0 17px}
+.tv-preset .tv-preset-play{width:26px;height:26px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:0 0 26px}
+.tv-preset .tv-preset-x{height:26px;padding:0 8px;border-radius:13px;font-size:11px}
+
+/* Ajustes: casillas de funciones */
+.set-check{display:flex;gap:12px;align-items:flex-start;cursor:pointer;padding:6px 0}
+.set-check input{width:18px;height:18px;margin-top:2px;accent-color:var(--acc);flex:0 0 18px}
+.set-check span{display:flex;flex-direction:column;gap:4px}
+.set-check small{color:var(--mut);font-size:13px;line-height:1.5}

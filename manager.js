@@ -369,6 +369,12 @@ function renderSettings(main) {
     return { el: h('div', { class: 'color-pick' }, inp, code), inp, code };
   };
   const p1 = picker('color1', 0), p2 = picker('color2', 1);
+  // ---- Funciones que se pueden activar o desactivar
+  const homeCb = h('input', { type: 'checkbox' }); homeCb.checked = state.settings.homeShelf !== false;
+  homeCb.onchange = () => { state.settings.homeShelf = homeCb.checked; persist(['settings']); };
+  main.append(h('div', { class: 'card', id: 'set-features' }, h('h3', { style: 'margin-top:0' }, '🧩 Funciones'),
+    h('label', { class: 'set-check' }, homeCb, h('span', {}, h('b', {}, 'Estante de YTBox en la portada de YouTube'),
+      h('small', {}, 'Entre las recomendaciones de la portada, los 3 últimos vídeos de uno de tus grupos (al azar, se puede cambiar) con botones para ver los 3 anteriores y siguientes.')))));
   main.append(h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '🎨 Apariencia'),
     h('p', {}, 'Elige el tema y los dos colores de la app. Se usan en degradado (el primero domina la mitad) en botones, etiquetas y títulos, aquí y dentro de YouTube. «Automático» sigue el tema de YouTube o el de tu sistema.'),
     h('div', { class: 'set-row' }, h('label', { class: 'lbl' }, 'Tema'), themeSeg),
@@ -676,8 +682,15 @@ function renderDiscover(main) {
     count.textContent = n ? `${n} canal${n > 1 ? 'es' : ''} seleccionado${n > 1 ? 's' : ''}` + (n > 12 ? ' · se mirarán 12 al azar cada vez' : '') : 'Ningún canal seleccionado';
   };
   const gchips = h('div', { class: 'tv-chips' });
-  const drawGroups = () => gchips.replaceChildren(...state.groups.map(g => h('button', { class: 'tv-chip' + (groupsSel.has(g.id) ? ' on' : ''), 'aria-pressed': groupsSel.has(g.id) ? 'true' : 'false',
-    onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); saveCfg(); } }, PG.iconEl(g, 20), g.name)));
+  const drawGroups = () => {
+    const allOn = state.groups.length > 0 && state.groups.every(g => groupsSel.has(g.id));
+    gchips.replaceChildren(
+      ...(state.groups.length > 1 ? [h('button', { class: 'tv-chip chip-all', title: allOn ? 'Quitar todos los grupos' : 'Elegir todos los grupos',
+        onclick: () => { if (allOn) groupsSel.clear(); else state.groups.forEach(g => groupsSel.add(g.id)); drawGroups(); updateCount(); saveCfg(); } },
+        PG.svgEl('check', 16, 'currentColor'), allOn ? 'Desmarcar todos' : 'Marcar todos')] : []),
+      ...state.groups.map(g => h('button', { class: 'tv-chip' + (groupsSel.has(g.id) ? ' on' : ''), 'aria-pressed': groupsSel.has(g.id) ? 'true' : 'false',
+        onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); saveCfg(); } }, PG.iconEl(g, 20), g.name)));
+  };
   drawGroups();
   const q = h('input', { type: 'search', placeholder: 'Buscar canal…', style: 'width:100%;max-width:420px' });
   const clist = h('div', { class: 'tv-clist' });
@@ -783,8 +796,15 @@ function renderTV(main) {
   };
   // Grupos
   const gchips = h('div', { class: 'tv-chips' });
-  const drawGroups = () => gchips.replaceChildren(...state.groups.map(g => h('button', { class: 'tv-chip' + (groupsSel.has(g.id) ? ' on' : ''), 'aria-pressed': groupsSel.has(g.id) ? 'true' : 'false',
-    onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); saveCfg(); } }, PG.iconEl(g, 20), g.name)));
+  const drawGroups = () => {
+    const allOn = state.groups.length > 0 && state.groups.every(g => groupsSel.has(g.id));
+    gchips.replaceChildren(
+      ...(state.groups.length > 1 ? [h('button', { class: 'tv-chip chip-all', title: allOn ? 'Quitar todos los grupos' : 'Elegir todos los grupos',
+        onclick: () => { if (allOn) groupsSel.clear(); else state.groups.forEach(g => groupsSel.add(g.id)); drawGroups(); updateCount(); saveCfg(); } },
+        PG.svgEl('check', 16, 'currentColor'), allOn ? 'Desmarcar todos' : 'Marcar todos')] : []),
+      ...state.groups.map(g => h('button', { class: 'tv-chip' + (groupsSel.has(g.id) ? ' on' : ''), 'aria-pressed': groupsSel.has(g.id) ? 'true' : 'false',
+        onclick: () => { groupsSel.has(g.id) ? groupsSel.delete(g.id) : groupsSel.add(g.id); drawGroups(); updateCount(); saveCfg(); } }, PG.iconEl(g, 20), g.name)));
+  };
   drawGroups();
   // Canales sueltos
   const q = h('input', { type: 'search', placeholder: 'Buscar canal…', style: 'width:100%;max-width:420px' });
@@ -843,7 +863,7 @@ function renderTV(main) {
         persist(['settings']); drawPresets();
       };
       return h('div', { class: 'tv-preset' + (p.id === activeId ? ' on' : '') },
-        h('button', { class: 'tv-preset-load', title: 'Cargar esta configuración', onclick: () => loadPreset(p) }, h('b', {}, p.name), h('small', {}, YTBoxTV.summary(p.cfg, state))),
+        h('button', { class: 'tv-preset-load', title: `Cargar «${p.name}»\n${YTBoxTV.summary(p.cfg, state)}`, onclick: () => loadPreset(p) }, p.name),
         h('button', { class: 'tv-preset-play', title: 'Ver ya', 'aria-label': 'Ver ' + p.name, onclick: () => { loadPreset(p); go.click(); } }, '▶'), del);
     }) : [h('span', { class: 'muted' }, 'Aún no tienes ninguna. Configura abajo y guárdala con un nombre (p. ej. «Dormir» o «Comer»).')]));
   };

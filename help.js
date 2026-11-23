@@ -32,9 +32,21 @@ const YTBOX_HELP = [
         '**Sección YTBox** en la barra lateral de YouTube: pulsa «YTBox ▾» para plegarla o desplegarla.',
         'Arriba del todo: **Modo TV** (con «▸ N» para desplegar tus preconfiguraciones y lanzarlas con un clic), **Descubrir** y **Nuevos vídeos** (con el total de vídeos nuevos).',
         'Debajo, tus **grupos** con el número de **vídeos nuevos** de cada uno. Si no hay nuevos, no sale número.',
-        'Menú **⋮**: «Marcar todo como visto» y ordenar los grupos por nombre (A-Z, Z-A) o por vídeos sin ver.',
+        'Menú **⋮** de la cabecera YTBox: «Marcar todo como visto» y ordenar los grupos por nombre (A-Z, Z-A) o por vídeos sin ver.',
+        'Menú **⋮ de cada grupo** (aparece al pasar el ratón por el grupo): **Marcar como leído** (quita sus novedades), **Fijar arriba** (el grupo queda siempre al principio de la lista, con una chincheta; «Quitar de arriba» lo devuelve a su sitio), **Silenciar** (el grupo sale en gris con una campana tachada y no muestra novedades ni cuenta en «Nuevos vídeos» hasta que pulses «Activar novedades») y **Editar** (abre ese grupo en el gestor).',
         '**Botón de YTBox en la barra superior** (junto a Crear y notificaciones): abre un desplegable con Modo TV, Descubrir, Nuevos vídeos y tus grupos, siempre a mano aunque la barra lateral esté cerrada.'],
       ['tip', 'Los números se pintan al momento con los últimos datos guardados y se van poniendo al día mientras YTBox lee los canales. Si tienes el filtro «Vídeos» en los grupos, los Shorts no cuentan como nuevos.'],
+    ],
+  },
+  {
+    id: 'portada', title: 'Estante en la portada de YouTube', icon: 'casa', blocks: [
+      'En la portada de YouTube, entre las recomendaciones (después de sus dos primeras filas), YTBox muestra un estante (con el rótulo **YTBox** delante del nombre del grupo) con **los 3 vídeos más recientes de uno de tus grupos**, elegido al azar cada vez que entras (nunca uno silenciado).',
+      ['ul',
+        'Pulsa el **nombre del grupo ▾** para elegir otro, o el botón **aleatorio** para otro al azar.',
+        '**‹ ›** muestran los 3 vídeos anteriores o siguientes del grupo (arriba ves, por ejemplo, «4–6 de 45»).',
+        '**▶ Reproducir todo** pone los vídeos del grupo en una lista; **Abrir grupo** abre la vista completa; el **⚙** lleva a los Ajustes.',
+        'Cada vídeo muestra miniatura, duración, canal (pulsable), visualizaciones y antigüedad, con la etiqueta **Nuevo** o **VISTO**. Los Shorts no salen.',
+        'Se activa o desactiva en **Ajustes → Funciones → Estante de YTBox en la portada de YouTube**.'],
     ],
   },
   {
@@ -45,7 +57,7 @@ const YTBOX_HELP = [
         '**Fila de canales**: pulsa uno para ver solo sus vídeos; el número rojo son sus nuevos. Algunos llevan un aviso (ver «Avisos de canales»).',
         '**Filtros**: orden (más recientes, más antiguos, más vistos o por canal), fecha (últimas 24 horas, semana, mes o cualquiera), **Todo / Vídeos / Shorts** y **Todos / No vistos**.',
         '**Vistas**: cuadrícula, compacta o lista (botones de la derecha).',
-        '**En cada vídeo**: etiqueta **Nuevo** si se subió desde tu última visita al grupo, **VISTO** si ya lo viste, y la **duración** abajo a la derecha (o SHORT).',
+        '**En cada vídeo**: etiqueta **Nuevo** si se subió desde tu última visita al grupo, **VISTO** si ya lo viste, y la **duración** abajo a la derecha (o SHORT). Pulsar el **nombre o el avatar del canal** te lleva a su canal en vez de reproducir el vídeo (con Ctrl o clic central, en otra pestaña).',
         'Al **pasar el ratón** por la miniatura: Ver más tarde, Guardar en una lista y Añadir a la cola de YouTube.',
         'Menú **⋮** de cada vídeo: añadir a la cola, Ver más tarde, guardar en una lista, marcar como nuevo / quitar marca, marcar como visto / no visto.'],
       'Al entrar en un grupo se apunta la visita: la próxima vez serán «Nuevo» los vídeos subidos después.',
@@ -85,7 +97,7 @@ const YTBOX_HELP = [
     id: 'tv', title: 'Modo TV', icon: 'tv', blocks: [
       'Crea una lista **aleatoria** con vídeos de los canales que elijas y la reproduce en YouTube, con la duración total que indiques. Se abre desde la barra lateral, el desplegable de arriba o el menú del gestor.',
       ['ul',
-        '**¿De qué canales?**: grupos enteros y/o canales sueltos. Los canales sueltos elegidos salen como **chips** con una × para quitarlos y un botón «Quitar todos».',
+        '**¿De qué canales?**: grupos enteros y/o canales sueltos. El primer chip, **Marcar todos / Desmarcar todos**, elige o quita todos los grupos de golpe. Los canales sueltos elegidos salen como **chips** con una × para quitarlos y un botón «Quitar todos».',
         '**¿Qué vídeos?**: solo los que no has visto, fecha de subida (último día, 3 días, semana, mes o cualquiera) y **duración máxima de cada vídeo**.',
         '**¿Cuánto tiempo?**: minutos u horas (con atajos de 30 min, 1 h, 2 h y 4 h).',
         '**¿Cómo lo ves?**: **Vídeos completos** o **Picoteo** (ver abajo).',
@@ -97,7 +109,7 @@ const YTBOX_HELP = [
     id: 'tv-presets', title: 'Modo TV: preconfiguraciones y previsualización', icon: 'estrella', blocks: [
       ['ul',
         '**Guardar**: configura el Modo TV, escribe un nombre (p. ej. «Dormir») y pulsa 💾 Guardar. Si el nombre ya existe, se actualiza.',
-        '**Usar**: en «Mis preconfiguraciones», pulsa el nombre para cargarla, ▶ para verla directamente o ✕ (dos veces) para borrarla. También salen bajo «Modo TV» en la barra lateral y en el desplegable de arriba (botón «▸ N»).',
+        '**Usar**: en «Mis preconfiguraciones» cada una es un chip pequeño; pasa el ratón por encima para ver su resumen (duración, fechas, grupos…). Pulsa el nombre para cargarla, el ▶ pequeño para verla directamente o ✕ (dos veces) para borrarla. También salen bajo «Modo TV» en la barra lateral y en el desplegable de arriba (botón «▸ N»): al pulsarlas se abre el Modo TV con esa preconfiguración y la lista **ya preparada en la previsualización**; no empieza a reproducirse hasta que pulses **VER ESTA LISTA**.',
         '**👁 Previsualizar**: genera la lista y te la enseña antes de verla (miniatura, título, canal y duración). Quita con ✕ los que no te apetezcan, **🔀 Otra** genera otra distinta y **Descartar** la cierra. Con previsualización, el botón pasa a «VER ESTA LISTA».',
         'Mientras trabaja verás un **spinner y una barra de progreso**.'],
     ],
@@ -114,7 +126,7 @@ const YTBOX_HELP = [
     id: 'descubrir', title: 'Descubrir', icon: 'brujula', blocks: [
       'Sugiere **canales parecidos a los tuyos que aún no tienes** en YTBox: mira los vídeos relacionados de los últimos vídeos de tus canales y cuenta qué otros canales aparecen más (pesa más si salen con varios de tus canales distintos).',
       ['ul',
-        'Elige grupos o canales sueltos (con chips para quitarlos) y pulsa **✦ Descubrir**. Cada vez sale una tanda distinta.',
+        'Elige grupos (con **Marcar todos / Desmarcar todos** para elegirlos todos de golpe) o canales sueltos (con chips para quitarlos) y pulsa **✦ Descubrir**. Cada vez sale una tanda distinta.',
         'Cada sugerencia dice a qué canales tuyos se parece y enseña dos de sus vídeos. Pulsa su nombre para abrir el canal.',
         '**+ Añadir a grupo** lo mete en el grupo que elijas; **No me interesa** hace que no vuelva a salir.'],
       ['tip', 'Úsalo **desde YouTube** (sección YTBox → Descubrir). Desde el gestor YouTube suele rechazar las consultas («YouTube respondió 403»); si tienes YouTube abierto en otra pestaña, el gestor la usa para hacerlas y sí funciona. El aviso de la página del gestor tiene un botón para abrir Descubrir directamente en YouTube.'],
@@ -146,6 +158,7 @@ const YTBOX_HELP = [
     id: 'ajustes', title: 'Ajustes', icon: 'engranaje', blocks: [
       ['ul',
         '**Apariencia**: tema claro, oscuro o automático, y los dos colores del degradado de la app.',
+        '**Funciones**: activar o desactivar el estante de YTBox en la portada de YouTube.',
         '**Importar desde PocketTube**: elige la copia de seguridad exportada desde PocketTube (.json o .txt). Los grupos con el mismo nombre se combinan.',
         '**Sincronizar entre navegadores**: guarda grupos y canales en tu cuenta del navegador (Chrome o Edge con sincronización activada).',
         '**Copia de seguridad**: exporta o importa un JSON con grupos, iconos, canales, preconfiguraciones del Modo TV y ajustes (al importar puedes combinar o reemplazar).',
