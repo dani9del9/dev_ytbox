@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "YTBox — grupos de suscripciones de YouTube",
   "short_name": "YTBox",
-  "version": "2.15.3",
+  "version": "2.15.5",
   "description": "Organiza tus suscripciones de YouTube en grupos con cientos de iconos: emojis, iconos de línea, texto, imágenes propias y avatares.",
   "permissions": [
     "storage",

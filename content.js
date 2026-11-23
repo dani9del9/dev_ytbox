@@ -388,7 +388,7 @@
       } }, h('span', {}, 'YTBox'), h('span', { class: 'pg-guide-caret' }, open ? '▾' : '▸')),
       h('span', { class: 'pg-guide-actions' },
         h('button', { class: 'pg-guide-btn', title: 'Nuevo grupo', 'aria-label': 'Nuevo grupo', onclick: () => openManager('new') }, '+'),
-        h('button', { class: 'pg-guide-btn', title: 'Gestionar grupos', 'aria-label': 'Gestionar grupos', onclick: () => openManager() }, '⚙'),
+        h('button', { class: 'pg-guide-btn', title: 'Ajustes de YTBox', 'aria-label': 'Ajustes de YTBox', onclick: () => openManager('settings') }, '⚙'),
         moreBtn),
     ));
     if (!open) return;

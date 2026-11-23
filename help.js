@@ -11,7 +11,7 @@ const YTBOX_HELP = [
       'Funciona en dos sitios:',
       ['ul',
         '**Dentro de YouTube**: una sección «YTBox» en la barra lateral, un botón en la barra superior y un botón junto a «Suscribirse» en cada canal y vídeo.',
-        '**En el gestor** (esta página): para crear y editar grupos, Modo TV, Descubrir, Calendario, ajustes y esta ayuda. Se abre con el ⚙ de la sección YTBox o con el icono de la extensión.'],
+        '**En el gestor** (esta página): para crear y editar grupos, Modo TV, Descubrir, Calendario, ajustes y esta ayuda. Se abre con el icono de la extensión o con «Gestionar grupos» del menú ▾; el ⚙ de la sección YTBox del menú lateral lo abre directamente en **Ajustes**.'],
     ],
   },
   {
