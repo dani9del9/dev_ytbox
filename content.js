@@ -62,6 +62,12 @@
 
   async function refresh() { state = await PG.load(); applyTheme(); $('#pg-launcher')?.remove(); renderGuide(true); safe(updateFab); safe(decorateChannelList, true); const fb = $('#pg-feedbar'); fb && safe(drawFeedBar, fb); }
   chrome.storage.onChanged.addListener(ch => { if (ch.groups || ch.channels || ch.settings) refresh(); });
+  // Si en otra pestaña se abre un grupo, se marca algo o se ve un vídeo, los números de esta pestaña también bajan
+  let syncT = null;
+  chrome.storage.onChanged.addListener(ch => {
+    if (!(ch.seen || ch.marks || ch.watched)) return;
+    clearTimeout(syncT); syncT = setTimeout(() => quickRecount().catch(() => {}), 400);
+  });
 
   function openManager(hash = '') { chrome.runtime.sendMessage({ type: 'openManager', hash }); }
 
@@ -76,17 +82,30 @@
     try { updateLauncher(); } catch (e) { console.error('[YTBox] botón superior', e); }
   }
 
-  // Orden de los grupos en la barra lateral: último vídeo subido (por defecto), nombre A-Z o Z-A, vídeos sin ver
-  // (sidebarSortV = 2: el usuario eligió un orden con la versión nueva; si no, va por «último vídeo subido»)
-  const sidebarSortMode = () => (state.settings.sidebarSortV === 2 && state.settings.sidebarSort) || 'recent';
+  // Orden de los grupos en la barra lateral. En todos los modos los grupos con vídeos nuevos van arriba:
+  // - «Vídeos nuevos» (por defecto): los que tienen más nuevos primero y, el resto, por el último vídeo subido
+  // - «Nombre (A-Z / Z-A)»: por nombre (primero los que tienen nuevos)
+  // - «Grupos con más canales»: por número de canales (primero los que tienen nuevos)
+  // (sidebarSortV = 3: orden elegido con esta versión; los valores antiguos pasan a «Vídeos nuevos»)
+  const SORTS = ['new', 'az', 'za', 'channels'];
+  const sidebarSortMode = () => (state.settings.sidebarSortV === 3 && SORTS.includes(state.settings.sidebarSort) && state.settings.sidebarSort) || 'new';
   function sortedGroups() {
     const mode = sidebarSortMode();
-    const list = state.groups.map((g, i) => ({ g, i }));
-    const byName = (a, b) => a.g.name.localeCompare(b.g.name, 'es', { sensitivity: 'base', numeric: true });
-    if (mode === 'az') list.sort(byName);
-    else if (mode === 'za') list.sort((a, b) => byName(b, a));
-    else if (mode === 'unwatched') list.sort((a, b) => ((newCounts[b.g.id] || 0) - (newCounts[a.g.id] || 0)) || (a.i - b.i));
-    else list.sort((a, b) => ((groupLatest[b.g.id] || 0) - (groupLatest[a.g.id] || 0)) || (a.i - b.i)); // el grupo con el vídeo más reciente primero
+    const nNew = g => g.muted ? 0 : (newCounts[g.id] || 0);
+    const byName = (a, b) => a.g.name.localeCompare(b.g.name, T.locale(), { sensitivity: 'base', numeric: true });
+    const byLatest = (a, b) => (groupLatest[b.g.id] || 0) - (groupLatest[a.g.id] || 0);
+    const rest = {
+      new: byLatest,
+      az: byName,
+      za: (a, b) => byName(b, a),
+      channels: (a, b) => (b.g.channels.length - a.g.channels.length) || byName(a, b),
+    }[mode];
+    const list = state.groups.map((g, i) => ({ g, i, n: nNew(g) }));
+    list.sort((a, b) => {
+      if (!!a.n !== !!b.n) return a.n ? -1 : 1;                 // con nuevos, arriba
+      if (mode === 'new' && a.n && b.n && a.n !== b.n) return b.n - a.n; // más nuevos, más arriba
+      return rest(a, b) || (a.i - b.i);
+    });
     // Los grupos fijados van siempre arriba (en el mismo orden entre ellos)
     return list.filter(x => x.g.pinned).concat(list.filter(x => !x.g.pinned)).map(x => x.g);
   }
@@ -101,17 +120,87 @@
       shown++;
       const more = withMenu ? h('button', { class: 'pg-gmenu-btn', title: T('Opciones del grupo'), 'aria-label': T('Opciones de ') + g.name,
         onclick: e => { e.preventDefault(); e.stopPropagation(); openGroupItemMenu(e.currentTarget, g); } }, '⋮') : null;
-      container.append(h('a', { class: 'pg-guide-item' + (g.muted ? ' pg-muted' : '') + (withMenu ? ' pg-has-menu' : ''), href: '#',
-        title: (g.pinned ? '📌 ' : '') + g.name + (g.muted ? T(' · silenciado') : n ? TN(n, ' · {0} vídeo nuevo', ' · {0} vídeos nuevos') : ''),
+      const preview = withMenu && state.settings.previewNewInMenu && n > 0;
+      const row = h('a', { class: 'pg-guide-item' + (g.muted ? ' pg-muted' : '') + (withMenu ? ' pg-has-menu' : ''), href: '#',
+        ...(preview ? {} : { title: (g.pinned ? '📌 ' : '') + g.name + (g.muted ? T(' · silenciado') : n ? TN(n, ' · {0} vídeo nuevo', ' · {0} vídeos nuevos') : '') }),
         onclick: e => { e.preventDefault(); $('#pg-launch-menu')?.remove(); openGroup(g.id); } },
         PG.iconEl(g, size), h('span', { class: 'pg-guide-name' + (n ? ' pg-has-new' : '') }, g.name),
         g.pinned ? h('span', { class: 'pg-gflag', title: T('Fijado arriba') }, PG.svgEl('chincheta', 14, 'currentColor')) : null,
         g.muted ? h('span', { class: 'pg-gflag', title: T('Silenciado: no muestra novedades') }, PG.svgEl('silencio', 14, 'currentColor')) : null,
         n ? h('span', { class: 'pg-guide-new' }, n > 99 ? '99+' : String(n)) : null,
-        more));
+        more);
+      container.append(row);
+      if (preview) {
+        row.addEventListener('mouseenter', () => schedulePreview(row, g));
+        row.addEventListener('mouseleave', () => schedulePreview(null));
+      }
     }
     if (onlyNew && !shown && state.groups.length) container.append(h('div', { class: 'pg-guide-empty' }, T('No hay grupos con vídeos nuevos.')))
   }
+
+  // ---------- Previsualizar los vídeos nuevos de un grupo al pasar el ratón (opción de Ajustes) ----------
+  let previewT = null, previewFor = null;
+  function schedulePreview(row, g) {
+    clearTimeout(previewT);
+    if (!row) { previewT = setTimeout(() => { if (!$('#pg-gpreview:hover')) closePreview(); }, 250); return; }
+    previewT = setTimeout(() => showPreview(row, g), 280);
+  }
+  function closePreview() { $('#pg-gpreview')?.remove(); previewFor = null; }
+  async function newVideosOf(g) {
+    const { seen = {}, marks = {}, watched = {} } = await chrome.storage.local.get(['seen', 'marks', 'watched']);
+    const since = seen[g.id] || 0, m = marks[g.id] || {};
+    const type = state.settings.typeFilter || (state.settings.hideShorts ? 'videos' : 'all');
+    const ids = [...new Set(g.channels.map(k => state.channels[k]).filter(c => c && c.id).map(c => c.id))];
+    const out = [];
+    await pool(ids, 6, async id => {
+      let items = [];
+      try { items = await fetchRss(id); } catch (e) { return; }
+      for (const v of items) {
+        const isN = v.vid in m ? m[v.vid] : (since > 0 && v.published.getTime() > since);
+        if (isN && !watched[v.vid] && (type === 'all' || (type === 'shorts') === !!v.short)) out.push(v);
+      }
+    });
+    const seenV = new Set();
+    return out.filter(v => !seenV.has(v.vid) && seenV.add(v.vid)).sort((a, b) => b.published - a.published);
+  }
+  async function showPreview(row, g) {
+    if (!row.isConnected) return;
+    if (previewFor === g.id && $('#pg-gpreview')) return;
+    closePreview(); previewFor = g.id;
+    const guide = row.closest('#pg-guide') || row;
+    const gr = guide.getBoundingClientRect(), rr = row.getBoundingClientRect();
+    const list = h('div', { class: 'pg-gp-list' }, h('div', { class: 'pg-gp-loading' }, h('span', { class: 'pg-spin', style: 'display:inline-block' }), T('Cargando…')));
+    const panel = h('div', { id: 'pg-gpreview' },
+      h('div', { class: 'pg-gp-head' }, PG.iconEl(g, 22), h('b', {}, g.name),
+        h('button', { class: 'pg-gp-close', title: T('Cerrar'), 'aria-label': T('Cerrar'), onclick: () => closePreview() }, '✕')),
+      list,
+      h('div', { class: 'pg-gp-actions' },
+        h('button', { class: 'pg-gp-open', onclick: () => { closePreview(); openGroup(g.id); } }, T('Abrir grupo')),
+        h('button', { class: 'pg-gp-seen', onclick: async () => { closePreview(); await markGroupSeen(g); } }, T('Marcar como visto'))));
+    panel.addEventListener('mouseleave', () => schedulePreview(null));
+    panel.addEventListener('mouseenter', () => clearTimeout(previewT));
+    // A la derecha de la barra lateral (no tapa el nombre del grupo), a la altura de la fila
+    panel.style.left = Math.round(gr.right + 8) + 'px';
+    panel.style.top = Math.max(64, Math.round(rr.top - 8)) + 'px';
+    document.body.append(panel);
+    const fit = () => { const ph = panel.offsetHeight; if (rr.top - 8 + ph > window.innerHeight - 12) panel.style.top = Math.max(64, window.innerHeight - 12 - ph) + 'px'; };
+    fit();
+    const vids = await newVideosOf(g);
+    if (previewFor !== g.id || !panel.isConnected) return;
+    const byId = new Map(Object.values(state.channels).filter(c => c.id).map(c => [c.id, c]));
+    list.replaceChildren(...(vids.length ? vids.slice(0, 12).map(v => {
+      const c = byId.get(v.channelId) || {};
+      const url = (v.short ? '/shorts/' : '/watch?v=') + v.vid;
+      return h('a', { class: 'pg-gp-item', href: url, onclick: () => closePreview() },
+        h('span', { class: 'pg-gp-thumb' }, h('img', { src: `https://i.ytimg.com/vi/${v.vid}/mqdefault.jpg`, loading: 'lazy', alt: '' }),
+          v.vid in durations ? h('span', { class: 'pg-dur' }, fmtDuration(durations[v.vid])) : null),
+        h('span', { class: 'pg-gp-meta' }, h('span', { class: 'pg-gp-title' }, v.title),
+          h('span', { class: 'pg-gp-sub' }, (v.author || c.name || '') + ' · ' + PG.relTime(v.published))));
+    }) : [h('div', { class: 'pg-gp-loading' }, T('No hay vídeos nuevos.'))]),
+      vids.length > 12 ? h('div', { class: 'pg-gp-more' }, T('y {0} más…', vids.length - 12)) : '');
+    fit();
+  }
+  window.addEventListener('scroll', e => { const p = $('#pg-gpreview'); if (p && !(e.target instanceof Node && p.contains(e.target))) closePreview(); }, true);
 
   // Menú ⋮ de cada grupo en la barra lateral
   async function markGroupSeen(g) {
@@ -156,15 +245,17 @@
     const old = $('#pg-menu');
     if (old) { old.remove(); if (old.dataset.kind === 'guide') return; }
     const mode = sidebarSortMode();
-    const setSort = async v => { menu.remove(); state.settings.sidebarSort = v; state.settings.sidebarSortV = 2; await PG.save({ settings: state.settings }); };
+    const setSort = async v => { menu.remove(); state.settings.sidebarSort = v; state.settings.sidebarSortV = 3; await PG.save({ settings: state.settings }); };
     const opt = (v, label) => h('button', { class: 'pg-vitem' + (mode === v ? ' on' : ''), onclick: () => setSort(v) },
       h('span', { class: 'pg-vcheck' }, mode === v ? '✓' : ''), h('span', {}, label));
     const menu = h('div', { id: 'pg-menu', 'data-kind': 'guide' },
       h('button', { class: 'pg-vitem', onclick: async () => { menu.remove(); await markAllSeen(); } },
         h('span', { class: 'pg-vicon' }, PG.svgEl('check', 18, 'currentColor')), h('span', {}, T('Marcar todo como visto'))),
+      h('button', { class: 'pg-vitem', onclick: () => { menu.remove(); updateNewCounts(true); } },
+        h('span', { class: 'pg-vicon' }, PG.svgEl('recargar', 18, 'currentColor')), h('span', {}, T('Buscar vídeos nuevos ahora'))),
       h('div', { class: 'pg-vsep' }),
       h('div', { class: 'pg-vlabel' }, T('Ordenar por')),
-      opt('recent', T('Último vídeo subido')), opt('az', T('Nombre (A-Z)')), opt('za', T('Nombre (Z-A)')), opt('unwatched', T('Vídeos sin ver')));
+      opt('new', T('Vídeos nuevos')), opt('az', T('Nombre (A-Z)')), opt('za', T('Nombre (Z-A)')), opt('channels', T('Grupos con más canales')));
     document.body.append(menu);
     const r = btn.getBoundingClientRect();
     menu.style.top = (r.bottom + 6) + 'px';
@@ -259,12 +350,19 @@
   let counting = null;
   function updateNewCounts(force) {
     if (counting) return counting;
-    counting = updateNewCountsNow(force).catch(e => console.warn('[YTBox] contadores', e)).finally(() => { counting = null; });
+    const t0 = Date.now();
+    counting = updateNewCountsNow(force).catch(e => console.warn('[YTBox] contadores', e)).finally(() => {
+      counting = null;
+      // El icono gira al menos un momento, para que se note que ha comprobado
+      setTimeout(() => document.querySelectorAll('.pg-reload').forEach(b => b.classList.remove('pg-busy')), Math.max(0, 700 - (Date.now() - t0)));
+    });
+    document.querySelectorAll('.pg-reload').forEach(b => b.classList.add('pg-busy'));
     return counting;
   }
   async function updateNewCountsNow(force) {
     if (!force && Date.now() - countingAt < 15 * 60 * 1000) return;
     countingAt = Date.now();
+    if (force) rssCache.clear();
     const { seen = {}, feedLite = {} } = await chrome.storage.local.get(['seen', 'feedLite']);
     // Un grupo que nunca se ha abierto empieza a contar novedades desde ahora
     const unseen = state.groups.filter(g => !seen[g.id]);
@@ -275,7 +373,7 @@
     const toFetch = [];
     for (const id of ids) {
       const f = feedLite[id];
-      if (f && Date.now() - f.t < 10 * 60 * 1000) lastFeed[id] = liteToFeed({ [id]: f })[id];
+      if (!force && f && Date.now() - f.t < 10 * 60 * 1000) lastFeed[id] = liteToFeed({ [id]: f })[id]; // con el botón recargar se vuelven a pedir todos
       else toFetch.push(id);
     }
     await quickRecount();
@@ -350,6 +448,8 @@
     m.append(...tvBlock('pg-guide-item pg-tv-top', 18, false, () => m.remove()),
       discoverEntry('pg-guide-item pg-tv-top', 18, false, () => m.remove()),
       newVideosEntry('pg-guide-item pg-tv-top', 18, false, () => m.remove()),
+      h('div', { class: 'pg-vsep' }),
+      h('a', { class: 'pg-guide-item', href: '#', onclick: e => { e.preventDefault(); m.remove(); openManager('settings'); } }, h('span', { class: 'pg-launch-ico' }, PG.svgEl('engranaje', 18, 'currentColor')), h('span', { class: 'pg-guide-name' }, T('Ajustes de YTBox'))),
       h('div', { class: 'pg-vsep' }));
     if (!state.groups.length) m.append(h('div', { class: 'pg-menu-empty' }, T('Aún no tienes grupos.')));
     groupRows(m, 24);
@@ -375,7 +475,8 @@
       l.addEventListener('click', e => { e.stopPropagation(); openTopMenu(l); });
       end.insertBefore(l, end.firstChild);
     }
-    const total = Object.values(newCounts).reduce((a, n) => a + (n || 0), 0);
+    // Mismo número que «Nuevos vídeos»: cada vídeo nuevo cuenta una vez aunque su canal esté en varios grupos
+    const total = newTotal;
     const badge = l.querySelector('.pg-launch-badge');
     badge.textContent = total ? (total > 99 ? '99+' : String(total)) : '';
     badge.style.display = total ? '' : 'none';
@@ -809,14 +910,14 @@
       if (!calOpen && filters.day) { filters.day = null; render(); }
       drawCal(); saveSetting('calOpen', calOpen);
     };
+    const markAllBtn = virt ? h('button', { class: 'pg-markall', title: T('Quita la etiqueta «Nuevo» de todos los vídeos en todos tus grupos'), onclick: async () => { await markAllSeen(); openGroup(NEW_ID); } }, T('✓ Marcar todos como vistos en los grupos')) : null;
     const head = h('div', { class: 'pg-ov-head' },
       PG.iconEl(g, 40), h('h2', {}, g.name), newCount, status,
       h('div', { class: 'pg-ov-spacer' }),
       search,
       calBtn,
       h('button', { class: 'pg-btn', title: T('Recargar'), onclick: () => { g.channels.forEach(k => { const c = state.channels[k]; c && c.id && rssCache.delete(c.id); }); openGroup(groupId, since); } }, '⟳'),
-      virt ? h('button', { class: 'pg-markall', title: T('Quita la etiqueta «Nuevo» de todos los vídeos en todos tus grupos'), onclick: async () => { await markAllSeen(); openGroup(NEW_ID); } }, T('✓ Marcar todos como vistos en los grupos'))
-        : h('button', { class: 'pg-btn', title: T('Editar grupo'), onclick: () => openManager('group=' + g.id) }, '✎'),
+      virt ? null : h('button', { class: 'pg-btn', title: T('Editar grupo'), onclick: () => openManager('group=' + g.id) }, '✎'),
       h('button', { class: 'pg-btn', title: T('Cerrar (Esc)'), onclick: closeOverlay }, '✕'));
     const chips = h('div', { class: 'pg-chips' });
     // Barra de reproducción: modo + botón para lanzar la cola
@@ -824,9 +925,9 @@
       ...[['todos', T('Todos')], ['nuevos', T('Nuevos')], ['aleatorio', T('Aleatorio')], ['seleccionar', T('Seleccionar')]].map(([v, t]) => h('option', { value: v }, t)));
     modeSel.value = mode;
     // Qué hacer con esos vídeos
-    let action = ['cola', 'wl', 'playlist'].includes(state.settings.groupAction) ? state.settings.groupAction : 'cola';
+    let action = ['cola', 'wl', 'playlist', 'seen', 'new'].includes(state.settings.groupAction) ? state.settings.groupAction : 'cola';
     const actionSel = h('select', { class: 'pg-mode', title: T('Qué hacer con los vídeos') },
-      ...[['cola', T('Añadir a la cola')], ['wl', T('Añadir a Ver más tarde')], ['playlist', T('Añadir a una playlist')]].map(([v, t]) => h('option', { value: v }, t)));
+      ...[['cola', T('Añadir a la cola')], ['wl', T('Añadir a Ver más tarde')], ['playlist', T('Añadir a una playlist')], ['seen', T('Marcar como vistos')], ['new', T('Marcar como nuevos')]].map(([v, t]) => h('option', { value: v }, t)));
     actionSel.value = action;
     const playBtn = h('button', { class: 'pg-play' }, T('Aplicar'));
     const clearSel = h('button', { class: 'pg-clear', title: T('Quitar selección'), style: 'display:none' }, T('Limpiar'));
@@ -837,7 +938,8 @@
     playBtn.style.display = 'none'; modeSel.style.display = 'none'; actionSel.style.display = 'none'; // se muestran cuando hay vídeos
     const actions = h('div', { class: 'pg-actions' }, modeSel, clearSel, actionSel, playBtn);
     const grid = h('div', { class: 'pg-grid' });
-    overlay.append(head, h('div', { class: 'pg-row' }, chips, actions), toolbar, cal, grid);
+    overlay.append(head, h('div', { class: 'pg-row' }, chips, actions), toolbar, cal,
+      markAllBtn ? h('div', { class: 'pg-markall-row' }, markAllBtn) : null, grid);
     applyView();
     document.body.append(overlay);
     positionOverlay();
@@ -1008,12 +1110,14 @@
       const vids = visible();
       const counts = { todos: vids.length, nuevos: vids.filter(isNew).length, aleatorio: vids.length, seleccionar: selected.length };
       [...modeSel.options].forEach(o => { o.textContent = `${{ todos: T('Todos'), nuevos: T('Nuevos'), aleatorio: T('Aleatorio'), seleccionar: T('Seleccionar') }[o.value]} (${counts[o.value]})`; });
-      const max = action === 'cola' ? 50 : 200;
+      const max = action === 'cola' ? 50 : (action === 'seen' || action === 'new') ? Infinity : 200;
       const word = n === 1 ? T('vídeo') : T('vídeos');
       playBtn.title = !n ? T('No hay vídeos') : {
         cola: T('Crea una lista con {0} {1} y empieza a verla', Math.min(n, max), word) + (n > max ? T(' (YouTube admite 50 por cola)') : ''),
         wl: T('Guarda {0} {1} en «Ver más tarde»', Math.min(n, max), word),
         playlist: T('Elige una playlist y guarda en ella {0} {1}', Math.min(n, max), word),
+        seen: T('Marca como vistos {0} {1}', n, word),
+        new: T('Marca como nuevos {0} {1}', n, word),
       }[action];
     };
     const toggleSelect = (vid, el) => {
@@ -1045,6 +1149,24 @@
         location.href = '/watch_videos?video_ids=' + ids.join(',');
         return;
       }
+      if (action === 'seen' || action === 'new') {
+        const idSet = new Set(queueIds());
+        const vids = all.filter(v => idSet.has(v.vid));
+        if (!vids.length) return;
+        const asSeen = action === 'seen';
+        for (const v of vids) {
+          if (asSeen) watched[v.vid] = Date.now(); else delete watched[v.vid];
+          if (virt) for (const gid of groupsByChannel.get(v.channelId) || []) (marksAll[gid] || (marksAll[gid] = {}))[v.vid] = !asSeen;
+          else marks[v.vid] = !asSeen;
+        }
+        await saveMarks();
+        await chrome.storage.local.set({ watched });
+        toast(asSeen
+          ? TN(vids.length, '{0} vídeo marcado como visto', '{0} vídeos marcados como vistos')
+          : TN(vids.length, '{0} vídeo marcado como nuevo', '{0} vídeos marcados como nuevos'));
+        render(); renderChips(); quickRecount().catch(() => {});
+        return;
+      }
       const ids = queueIds().slice(0, 200);
       if (!ids.length) return;
       if (!YTAPI.loggedIn()) { toast(T('Inicia sesión en YouTube para guardar vídeos en tus listas'), true); return; }
@@ -1066,6 +1188,7 @@
       const n = all.filter(v => isNew(v) && passBase(v)).length;
       newCount.style.display = n ? '' : 'none';
       newCount.textContent = filters.onlyNew ? '✓ ' + TN(n, '{0} nuevo', '{0} nuevos') : TN(n, '{0} nuevo', '{0} nuevos');
+      if (markAllBtn) markAllBtn.disabled = !n;
     };
     newCount.onclick = () => { if (virt) return; filters.onlyNew = !filters.onlyNew; render(); };
     // Avisos (no se borra nada): canales que llevan mucho sin subir o que hace tiempo que no ves
@@ -1241,7 +1364,7 @@
   }
 
   function closeVideoMenu() { $('#pg-vmenu')?.remove(); }
-  document.addEventListener('mousedown', e => { const m = $('#pg-vmenu'); if (m && !m.contains(e.target) && !e.target.closest('.pg-dots')) m.remove(); }, true);
+  document.addEventListener('mousedown', e => { const m = $('#pg-vmenu'); if (m && !m.contains(e.target) && !e.target.closest('.pg-dots') && !e.target.closest('#pg-menu')) m.remove(); }, true);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeVideoMenu(); }, true);
 
   function placeMenu(menu, btn) {
@@ -1262,6 +1385,11 @@
     const menu = h('div', { id: 'pg-vmenu', 'data-vid': v.vid });
     const item = (icon, label, fn) => h('button', { class: 'pg-vitem', onclick: async e => { e.preventDefault(); e.stopPropagation(); await fn(); } },
       h('span', { class: 'pg-vicon' }, PG.svgEl(icon, 20, 'currentColor')), h('span', {}, label));
+    // Este, a diferencia de los demás, abre un submenú que cuelga a su derecha (el vídeo sigue abierto detrás)
+    const groupsItem = h('button', { class: 'pg-vitem', onclick: e => { e.preventDefault(); e.stopPropagation();
+      const ch = Object.values(state.channels).find(c => c.id === v.channelId);
+      openChannelGroupsMenu(groupsItem, { key: ch ? ch.key : v.channelId, name: v.author || (ch && ch.name) || '', href: 'https://www.youtube.com/channel/' + v.channelId });
+    } }, h('span', { class: 'pg-vicon' }, PG.svgEl('carpeta', 20, 'currentColor')), h('span', {}, T('Cambiar los grupos del canal…')));
     menu.append(
       item('cola', T('Añadir a la cola'), async () => { closeVideoMenu(); addToYTQueue(v); }),
       item('reloj', T('Ver más tarde'), async () => {
@@ -1270,11 +1398,63 @@
         catch (err) { toast(err.message, true); }
       }),
       item('marcador', T('Guardar en una lista de reproducción'), () => showPlaylists(menu, btn, v)),
+      groupsItem,
       h('div', { class: 'pg-vsep' }),
       item('estrella', ctx.isNew(v) ? T('Quitar marca de nuevo') : T('Marcar como nuevo'), async () => { closeVideoMenu(); await ctx.toggleNew(v); }),
       item('ojo', ctx.isWatched(v) ? T('Marcar como no visto') : T('Marcar como visto'), async () => { closeVideoMenu(); await ctx.toggleWatched(v); }),
     );
     placeMenu(menu, btn);
+  }
+
+  // Submenú «Cambiar los grupos del canal…»: el mismo panel que usa el botón de suscripción (toggleMenu),
+  // pero anclado a la derecha del propio ítem del menú ⋮ (como un submenú), no debajo
+  function openChannelGroupsMenu(anchor, ref) {
+    const old = $('#pg-menu');
+    if (old) { old.remove(); if (old.dataset.kind === 'chgroups-' + ref.key) return; }
+    const menu = h('div', { id: 'pg-menu', 'data-kind': 'chgroups-' + ref.key });
+    const aliasKeys = () => new Set(channelAliases(ref.key).map(c => c.key));
+    const inNow = new Set(groupsOfChannel(ref.key).map(g => g.id));
+    menu.append(h('div', { class: 'pg-menu-title' }, ref.name || ref.key));
+    if (!state.groups.length) menu.append(h('div', { class: 'pg-menu-empty' }, T('No hay grupos todavía.')));
+    for (const g of state.groups) {
+      const cb = h('input', { type: 'checkbox' }); cb.checked = inNow.has(g.id);
+      menu.append(h('label', { class: 'pg-menu-item' }, cb, PG.iconEl(g, 20), h('span', {}, g.name)));
+      cb.addEventListener('change', async () => {
+        cb.disabled = true;
+        try {
+          const c = await ensureStoredChannel(ref);
+          const grp = state.groups.find(x => x.id === g.id);
+          const keys = aliasKeys(); keys.add(c.key);
+          if (cb.checked) { if (!grp.channels.some(k => keys.has(k))) grp.channels.push(c.key); }
+          else grp.channels = grp.channels.filter(k => !keys.has(k));
+          await PG.save({ groups: state.groups });
+        } catch (e) { toast(e.message, true); cb.checked = !cb.checked; }
+        cb.disabled = false;
+      });
+    }
+    const input = h('input', { type: 'text', placeholder: T('Nuevo grupo…'), class: 'pg-menu-new' });
+    input.addEventListener('keydown', async e => {
+      if (e.key !== 'Enter' || !input.value.trim()) return;
+      e.stopPropagation();
+      const c = await ensureStoredChannel(ref);
+      state.groups.push({ id: PG.uid(), name: input.value.trim(), icon: { type: 'emoji', value: '📁' }, color: '#ff6347', channels: [c.key] });
+      await PG.save({ groups: state.groups });
+      menu.remove();
+    });
+    input.addEventListener('keyup', e => e.stopPropagation());
+    input.addEventListener('keypress', e => e.stopPropagation());
+    menu.append(input);
+    document.body.append(menu);
+    // A la derecha del ítem del menú ⋮ (a la izquierda si no cabe), con el mismo tope de alto y scroll que el resto de #pg-menu
+    const r = anchor.getBoundingClientRect(), mw = menu.offsetWidth, mh = menu.offsetHeight;
+    let left = r.right + 6;
+    if (left + mw > window.innerWidth - 8) left = Math.max(8, r.left - mw - 6);
+    menu.style.left = left + 'px';
+    const cap = Math.round(window.innerHeight * 0.6);
+    menu.style.top = Math.max(8, Math.min(r.top, window.innerHeight - 8 - Math.min(mh, cap))) + 'px';
+    setTimeout(() => document.addEventListener('mousedown', function close(e) {
+      if (!menu.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', close); }
+    }), 0);
   }
 
   async function showPlaylists(menu, btn, v) {
@@ -1977,6 +2157,20 @@
     const { seen = {}, marks = {}, watched = {} } = await chrome.storage.local.get(['seen', 'marks', 'watched']);
     const since = seen[g.id] || 0, m = marks[g.id] || {};
     const isNewV = v => v.vid in m ? m[v.vid] : (since > 0 && v.published.getTime() > since);
+    // Mismas acciones que en la vista de un grupo (ver más tarde, listas, cola, ⋮)
+    const homeCtx = {
+      isNew: isNewV, isWatched: v => !!watched[v.vid], opened: () => {},
+      toggleNew: async v => {
+        const all = (await chrome.storage.local.get('marks')).marks || {};
+        (all[g.id] || (all[g.id] = {}))[v.vid] = !isNewV(v);
+        await chrome.storage.local.set({ marks: all }); drawHome(); quickRecount().catch(() => {});
+      },
+      toggleWatched: async v => {
+        const w = (await chrome.storage.local.get('watched')).watched || {};
+        if (w[v.vid]) delete w[v.vid]; else w[v.vid] = Date.now();
+        await chrome.storage.local.set({ watched: w }); drawHome(); quickRecount().catch(() => {});
+      },
+    };
     const byId = new Map(Object.values(state.channels).filter(c => c.id).map(c => [c.id, c]));
     const pick = h('button', { class: 'pg-home-pick', title: T('Cambiar de grupo'), onclick: e => { e.stopPropagation(); homeGroupMenu(pick); } },
       PG.iconEl(g, 28), h('span', {}, g.name), h('span', { class: 'pg-home-caret' }, '▾'));
@@ -2000,13 +2194,15 @@
           h('img', { src: `https://i.ytimg.com/vi/${v.vid}/mqdefault.jpg`, loading: 'lazy', alt: '' }),
           isNewV(v) && !watched[v.vid] ? h('span', { class: 'pg-home-new' }, T('Nuevo')) : null,
           watched[v.vid] ? h('span', { class: 'pg-home-seen' }, 'VISTO') : null,
-          dur ? h('span', { class: 'pg-dur' }, dur) : null),
+          dur ? h('span', { class: 'pg-dur' }, dur) : null,
+          hoverActions(v, homeCtx)),
         h('div', { class: 'pg-home-meta' },
           c.avatar ? h('img', { class: 'pg-home-av', src: c.avatar, referrerpolicy: 'no-referrer', alt: '' }) : h('span', { class: 'pg-home-av' }),
           h('div', { style: 'min-width:0' },
             h('a', { class: 'pg-home-title', href: url, title: v.title }, v.title),
             h('div', { class: 'pg-home-sub' }, h('a', { class: 'pg-chlink', href: '/' + (c.handle || 'channel/' + v.channelId), title: T('Ir al canal') }, v.author || c.name || '')),
-            h('div', { class: 'pg-home-sub' }, (v.views ? PG.fmtViews(v.views) + ' · ' : '') + PG.relTime(v.published)))));
+            h('div', { class: 'pg-home-sub' }, (v.views ? PG.fmtViews(v.views) + ' · ' : '') + PG.relTime(v.published))),
+          h('button', { class: 'pg-dots', title: T('Más acciones'), onclick: e => { e.preventDefault(); e.stopPropagation(); openVideoMenu(e.currentTarget, v, homeCtx); } }, '⋮')));
     });
     while (cards.length < HOME_N && cards.length) cards.push(h('div', { class: 'pg-home-card pg-home-empty' }));
     el.replaceChildren(
@@ -2035,7 +2231,9 @@
 
   // Con el ratón encima de un menú de YTBox, la rueda solo mueve el menú (nunca la página de detrás)
   document.addEventListener('wheel', e => {
-    const m = e.target instanceof Element && e.target.closest('#pg-menu, #pg-launch-menu, #pg-vmenu, #pg-disc-gmenu');
+    // El contenedor que realmente tiene scroll puede ser el propio menú (#pg-menu…) o una lista
+    // interior suya (.pg-vlists, en «Guardar en una lista»): closest() ya encuentra el más cercano
+    const m = e.target instanceof Element && e.target.closest('.pg-vlists, #pg-menu, #pg-launch-menu, #pg-vmenu, #pg-disc-gmenu');
     if (!m) return;
     e.preventDefault(); e.stopPropagation();
     m.scrollTop += e.deltaMode === 1 ? e.deltaY * 18 : e.deltaY;

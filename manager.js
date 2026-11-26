@@ -253,7 +253,7 @@ function renderGroup(main, g) {
       } }, T('Borrar grupo'))));
 
   // Canales del grupo
-  const chans = g.channels.map(k => state.channels[k] || { key: k, name: k });
+  const allChans = g.channels.map(k => state.channels[k] || { key: k, name: k });
   // Ordenar: A-Z, suscriptores, último vídeo subido o los que más ves. El orden se guarda en el grupo.
   const sortMode = (state.settings.groupSort || {})[g.id] || '';
   const sortStatus = h('span', { class: 'muted sort-status' });
@@ -261,11 +261,21 @@ function renderGroup(main, g) {
     ...[['', T('Ordenar…')], ['az', T('Alfabético (A-Z)')], ['subs', T('Más suscriptores')], ['latest', T('Último vídeo subido')], ['watched', T('Los que más ves')]].map(([v, t]) => h('option', { value: v }, t)));
   sortSel.value = sortMode;
   sortSel.onchange = () => sortGroup(g, sortSel.value, sortStatus, sortSel);
+  // Filtrar: todos, canales que llevan mucho sin subir, canales que hace tiempo que no ves
+  const filterMode = (state.settings.groupFilter || {})[g.id] || '';
+  const filterSel = h('select', { class: 'tv-select', title: T('Filtrar los canales del grupo') },
+    ...[['', T('Todos')], ['dormido', T('Llevan mucho sin subir contenido')], ['ojoTachado', T('Hace tiempo que no ves')]].map(([v, t]) => h('option', { value: v }, t)));
+  filterSel.value = filterMode;
+  filterSel.onchange = async () => {
+    state.settings.groupFilter = Object.assign({}, state.settings.groupFilter, { [g.id]: filterSel.value });
+    await persist(['settings']); render();
+  };
+  const chans = !filterMode ? allChans : allChans.filter(c => (chanHealth[c.key] || {}).icon === filterMode);
   main.append(h('div', { class: 'section-head' },
-    h('h3', { style: 'margin:0' }, T('Canales en el grupo ({0})', chans.length)),
-    chans.length > 1 ? h('div', { class: 'row', style: 'gap:12px' }, sortStatus, sortSel) : null));
+    h('h3', { style: 'margin:0' }, T('Canales en el grupo ({0})', allChans.length)),
+    allChans.length > 1 ? h('div', { class: 'row', style: 'gap:12px' }, sortStatus, filterSel, sortSel) : null));
   const list = h('div', { class: 'ch-list' });
-  if (!chans.length) list.append(h('div', { class: 'muted' }, T('Ningún canal todavía. Añádelos abajo.')));
+  if (!chans.length) list.append(h('div', { class: 'muted' }, filterMode ? T('Ningún canal con este filtro.') : T('Ningún canal todavía. Añádelos abajo.')));
   for (const c of chans) {
     list.append(h('div', { class: 'ch' }, channelLink(c, h('small', {}, sortMetric(c, sortMode) || c.handle || c.id || c.key)), healthEl(c),
       h('button', { class: 'icon-btn', title: T('Quitar del grupo'), onclick: async () => { g.channels = g.channels.filter(k => k !== c.key); await persist(['groups']); render(); } }, '✕')));
@@ -380,7 +390,9 @@ function renderSettings(main) {
     check('homeShelf', true, T('Estante de YTBox en la portada de YouTube'),
       T('Entre las recomendaciones de la portada, los 3 últimos vídeos de uno de tus grupos (al azar, se puede cambiar) con botones para ver los 3 anteriores y siguientes.')),
     check('onlyNewGroups', false, T('Mostrar solo los grupos con vídeos nuevos'),
-      T('En el panel lateral de YouTube solo salen los grupos que tienen vídeos nuevos (los fijados también se ocultan si no tienen novedades).'))));
+      T('En el panel lateral de YouTube solo salen los grupos que tienen vídeos nuevos (los fijados también se ocultan si no tienen novedades).')),
+    check('previewNewInMenu', false, T('Previsualizar nuevos en menú'),
+      T('Al pasar el ratón por un grupo con vídeos nuevos en el panel lateral, se despliega a su derecha un panel con esos vídeos.'))));
   main.append(h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, T('🎨 Apariencia')),
     h('p', {}, T('Elige el tema y los dos colores de la app. Se usan en degradado (el primero domina la mitad) en botones, etiquetas y títulos, aquí y dentro de YouTube. «Automático» sigue el tema de YouTube o el de tu sistema.')),
     h('div', { class: 'set-row' }, h('label', { class: 'lbl' }, T('Tema')), themeSeg),
